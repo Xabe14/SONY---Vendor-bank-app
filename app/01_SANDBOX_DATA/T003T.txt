@@ -1,0 +1,5 @@
+BLART	LTEXT
+KR	Vendor invoice
+KG	Vendor credit memo
+KZ	Vendor payment
+RE	Invoice receipt

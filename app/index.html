@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vendor bank app</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.js";
+
+      const ZV_ST_APP_CODE = await fetch("./00_CODE/FC_VENDOR_BANK_APP.py").then(
+        response => response.text()
+      );
+      const ZV_ST_REQUIREMENTS = await fetch("./00_CODE/requirements_stlite.txt").then(
+        response => response.text()
+      );
+      const ZV_LI_REQUIREMENTS = ZV_ST_REQUIREMENTS
+        .split("\n")
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith("#"));
+
+      const ZV_LI_ST_SHARED = [
+        "FC_IMPORT_TEXT",
+        "FC_FILE_UPLOADER",
+        "FC_GET_SELECTION_VALUE",
+        "FC_FILTER_BY_CATEGORY_SELECTION",
+        "FC_GET_EXCEL_BYTES",
+        "FC_DOWNLOAD_BUTTON",
+        "FC_COUNTRY_COORDINATES",
+        "FC_UI_STYLE",
+        "FC_STORAGE"
+      ];
+
+      const ZV_DI_FILES = {
+        "FC_VENDOR_BANK_APP.py": ZV_ST_APP_CODE,
+        "FC_APP_CONFIG.py": "ZV_BO_USE_WIDTH = False\n",
+        "Z_SHARED_FUNCTIONS/__init__.py": ""
+      };
+
+      for (const ZV_ST_NAME of ZV_LI_ST_SHARED) {
+        ZV_DI_FILES["Z_SHARED_FUNCTIONS/" + ZV_ST_NAME + ".py"] = await fetch(
+          "./00_CODE/Z_SHARED_FUNCTIONS/" + ZV_ST_NAME + ".py"
+        ).then(response => response.text());
+      }
+
+      mount(
+        {
+          entrypoint: "FC_VENDOR_BANK_APP.py",
+          requirements: ZV_LI_REQUIREMENTS,
+          files: ZV_DI_FILES
+        },
+        document.getElementById("root")
+      );
+    </script>
+  </body>
+</html>

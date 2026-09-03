@@ -1,0 +1,21 @@
+LAND1	LANDX
+JP	Japan
+NL	Netherlands
+US	United States
+GB	United Kingdom
+VN	Vietnam
+DE	Germany
+CN	China
+SG	Singapore
+KR	Korea, Republic of
+MY	Malaysia
+TH	Thailand
+IN	India
+FR	France
+IT	Italy
+CH	Switzerland
+KY	Cayman Islands
+PA	Panama
+AE	United Arab Emirates
+HK	Hong Kong
+LU	Luxembourg

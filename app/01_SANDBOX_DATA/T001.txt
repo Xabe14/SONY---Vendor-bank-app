@@ -1,0 +1,6 @@
+BUKRS	BUTXT	LAND1
+1000	Sony Corporation Japan	JP
+2000	Sony Europe BV	NL
+3000	Sony Electronics Inc	US
+4000	Sony UK Ltd	GB
+5000	Sony Vietnam Co Ltd	VN
