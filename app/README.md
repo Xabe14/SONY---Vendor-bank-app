@@ -35,19 +35,13 @@ files** from `01_SANDBOX_DATA/` into the uploader (drag them all in at once).
 The app matches a file to a table by its file **stem**: `LFA1.txt` is read as
 table LFA1, `BSAK.txt` as BSAK, and so on.
 
-> **Note about `LFA1.csv.xlsx`:** the file named `LFA1.csv.xlsx` in
-> `01_SANDBOX_DATA/` is an **Excel workbook (binary)**, not a CSV. Do **not**
-> rename it to `LFA1.csv` and upload it — the app reads text files only and
-> will fail with a schema/parse error (the binary bytes are not decodable as a
-> delimited text). Upload the real `LFA1.txt` instead. If you have SAP data as
-> an `.xlsx`, export it to tab-delimited text (or CSV) first.
-
 ## Or run it from GitHub Pages, with no server
 
-`index.html` at the root of the project mounts the app with stlite, exactly as
-described in the Streamlit chapter. Push the project, then open
-Settings -> Pages -> Visit site. `FC_APP_CONFIG.ZV_BO_USE_WIDTH` is set to False
-by index.html, because the browser build does not accept `width='stretch'`.
+`app/index.html` mounts the app with stlite, exactly as described in the
+Streamlit chapter; a redirect `index.html` at the repo root sends GitHub Pages
+visitors there. Push the project, then open Settings -> Pages -> Visit site.
+`FC_APP_CONFIG.ZV_BO_USE_WIDTH` is set to False by index.html, because the
+browser build does not accept `width='stretch'`.
 
 ## Regenerate the sandbox data
 
@@ -151,11 +145,3 @@ The extracts in `01_SANDBOX_DATA` are generated, not from any SAP system. The
 country coordinate lookup is also not from SAP and must be replaced by the lookup
 already used by the existing supplier location chart.
 
-## Still open
-
-- Field list is DRAFT, pending 300Framework P01 (L03).
-- REGUH-LAND1 to be verified in the system.
-- Counting grain where a vendor holds several bank accounts: KPI 2 counts
-  distinct vendors, not vendor-bank combinations.
-- Treatment of blocked (SPERR) and deletion-flagged (LOEVM) vendors: both are
-  currently carried into the population and shown as columns, not excluded.
