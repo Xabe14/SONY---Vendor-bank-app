@@ -13,11 +13,12 @@ when the bucket is unreachable. The snapshot carries an app-version tag so a
 cache written by an older UI version is never loaded back.
 """
 
+import base64
 import os
 import pickle
 from pathlib import Path
 
-ZV_ST_SNAPSHOT_VERSION = '2026-08-31'  # bump when the snapshot format changes
+ZV_ST_SNAPSHOT_VERSION = '2026-09-03'  # bump when the snapshot format changes
 ZV_ST_SNAPSHOT_FILENAME = 'snapshot.pkl'
 
 ZV_ST_ROOT = Path(__file__).resolve().parent.parent.parent  # <repo_root>
@@ -26,6 +27,28 @@ ZV_OB_LOCAL_SNAPSHOT = ZV_OB_CACHE_DIR / ZV_ST_SNAPSHOT_FILENAME
 
 ZV_ST_S3_BUCKET = os.environ.get('VB_S3_BUCKET', '').strip()
 ZV_ST_S3_PREFIX = 'vendor-bank-app'
+ZV_ST_SNAPSHOT_KEY = os.environ.get('VB_SNAPSHOT_KEY', '').strip()
+
+
+def _get_fernet():
+    """Return a Fernet instance from VB_SNAPSHOT_KEY, or None.
+
+    VB_SNAPSHOT_KEY must be a urlsafe base64-encoded 32-byte key (Fernet).
+    A missing/invalid key returns None — callers decide how to handle it.
+    """
+    if not ZV_ST_SNAPSHOT_KEY:
+        return None
+    try:
+        from cryptography.fernet import Fernet  # noqa: PLC0415
+        return Fernet(ZV_ST_SNAPSHOT_KEY.encode('ascii'))
+    except Exception as ZV_EXC:
+        print(f'[FC_STORAGE] invalid VB_SNAPSHOT_KEY, snapshot NOT encrypted: {ZV_EXC}')
+        return None
+
+
+def FC_SNAPSHOT_IS_ENCRYPTED() -> bool:
+    """True when the snapshot is (or will be) encrypted on write."""
+    return _get_fernet() is not None
 
 
 def _get_boto3():
@@ -58,6 +81,13 @@ def FC_SNAPSHOT_EXISTS() -> bool:
 def FC_SNAPSHOT_LOAD():
     """Return (tables_dict, results_dict, status_str) or (None, None, None)."""
     ZV_OB_PAYLOAD = None
+    ZV_OB_FERNET = _get_fernet()
+
+    def ZV_FN_DECODE(ZV_BY_RAW):
+        if ZV_OB_FERNET is not None:
+            return pickle.loads(ZV_OB_FERNET.decrypt(ZV_BY_RAW))
+        return pickle.loads(ZV_BY_RAW)
+
     if ZV_ST_S3_BUCKET:
         try:
             ZV_OB_BOTO = _get_boto3()
@@ -66,15 +96,13 @@ def FC_SNAPSHOT_LOAD():
                 ZV_OB_RESPONSE = ZV_OB_S3.get_object(
                     Bucket=ZV_ST_S3_BUCKET, Key=_s3_key()
                 )
-                ZV_OB_PAYLOAD = pickle.loads(
-                    ZV_OB_RESPONSE['Body'].read()
-                )
+                ZV_OB_PAYLOAD = ZV_FN_DECODE(ZV_OB_RESPONSE['Body'].read())
         except Exception:
             ZV_OB_PAYLOAD = None  # fall back to local disk
     if ZV_OB_PAYLOAD is None and ZV_OB_LOCAL_SNAPSHOT.exists():
         try:
             with ZV_OB_LOCAL_SNAPSHOT.open('rb') as ZV_OB_FILE:
-                ZV_OB_PAYLOAD = pickle.load(ZV_OB_FILE)
+                ZV_OB_PAYLOAD = ZV_FN_DECODE(ZV_OB_FILE.read())
         except Exception:
             ZV_OB_PAYLOAD = None
     if not isinstance(ZV_OB_PAYLOAD, dict):
@@ -95,7 +123,13 @@ def FC_SNAPSHOT_SAVE(ZVFCI_DI_TABLES, ZVFCI_DI_RESULTS,
         'RESULTS': ZVFCI_DI_RESULTS,
         'STATUS': ZVFCI_ST_STATUS,
     }
+    ZV_OB_FERNET = _get_fernet()
     ZV_BY_PICKLE = pickle.dumps(ZV_OB_PAYLOAD)
+    if ZV_OB_FERNET is not None:
+        ZV_BY_PICKLE = ZV_OB_FERNET.encrypt(ZV_BY_PICKLE)
+    else:
+        print('[FC_STORAGE] WARNING: snapshot is NOT encrypted. '
+              'Set VB_SNAPSHOT_KEY to encrypt SAP data at rest.')
 
     if ZV_ST_S3_BUCKET:
         try:

@@ -9,21 +9,17 @@ shared functions for every reusable object, sidebar layout as in the current app
 Vega-Lite params for cross-filtering, session_state to survive a rerun.
 """
 
-import io as PI_IO
+import hashlib
+import time
 
 import polars as PI_POLARS
 import streamlit as PI_STREAMLIT
 
 from FC_APP_CONFIG import ZV_BO_USE_WIDTH
-from Z_SHARED_FUNCTIONS.FC_IMPORT_TEXT import FC_IMPORT_TEXT
 from Z_SHARED_FUNCTIONS.FC_FILE_UPLOADER import FC_FILE_UPLOADER
 from Z_SHARED_FUNCTIONS.FC_GET_SELECTION_VALUE import FC_GET_SELECTION_VALUE
-from Z_SHARED_FUNCTIONS.FC_FILTER_BY_CATEGORY_SELECTION import (
-    FC_FILTER_BY_CATEGORY_SELECTION,
-)
-from Z_SHARED_FUNCTIONS.FC_GET_EXCEL_BYTES import FC_GET_EXCEL_BYTES
+from Z_SHARED_FUNCTIONS.FC_CATEGORY_MULTISELECT import FC_CATEGORY_MULTISELECT
 from Z_SHARED_FUNCTIONS.FC_DOWNLOAD_BUTTON import FC_DOWNLOAD_BUTTON
-from Z_SHARED_FUNCTIONS.FC_COUNTRY_COORDINATES import FC_COUNTRY_COORDINATES
 from Z_SHARED_FUNCTIONS.FC_UI_STYLE import (
     FC_INJECT_CSS,
     FC_SECTION_HEADER,
@@ -32,10 +28,27 @@ from Z_SHARED_FUNCTIONS.FC_UI_STYLE import (
 from Z_SHARED_FUNCTIONS.FC_STORAGE import (
     FC_SNAPSHOT_CLEAR,
     FC_SNAPSHOT_EXISTS,
+    FC_SNAPSHOT_IS_ENCRYPTED,
     FC_SNAPSHOT_LOAD,
     FC_SNAPSHOT_SAVE,
     FC_STORAGE_BACKEND_LABEL,
 )
+from Z_SHARED_FUNCTIONS.FC_ADD_DESCRIPTION import (
+    FC_ADD_DESCRIPTION,
+    FC_MERGE_CODE_DESCRIPTION,
+)
+from Z_SHARED_FUNCTIONS.FC_MAP_GRAPH import (
+    FC_MAP_GRAPH,
+    FC_MAP_ROLE_OVERLAP,
+)
+from Z_SHARED_FUNCTIONS.FC_SHOW_TABLE import FC_SHOW_TABLE
+from Z_SHARED_FUNCTIONS.FC_BUILD_TEMPLATE_BYTES import FC_BUILD_TEMPLATE_BYTES
+from Z_SHARED_FUNCTIONS.FC_READ_UPLOADS import FC_READ_UPLOADS
+from Z_SHARED_FUNCTIONS.FC_CHECK_TABLES_AND_FIELDS import (
+    FC_CHECK_TABLES_AND_FIELDS,
+    FC_CHECK_TABLE_WARNINGS,
+)
+from Z_SHARED_FUNCTIONS.FC_TYPECAST import FC_TYPECAST_TABLES
 
 PI_STREAMLIT.set_page_config(page_title='Vendor bank app', layout='wide')
 
@@ -63,76 +76,28 @@ ZV_ST_KEY_TABLES = 'ZV_VB_TABLES'
 ZV_ST_KEY_RESULTS = 'ZV_VB_RESULTS'
 ZV_ST_KEY_STATUS = 'ZV_VB_STATUS'
 ZV_ST_KEY_RESTORE = 'ZV_VB_RESTORE_PENDING'
+ZV_ST_KEY_UPLOAD_ERRORS = 'ZV_VB_UPLOAD_ERRORS'
+ZV_ST_KEY_TYPECAST_WARNINGS = 'ZV_VB_TYPECAST_WARNINGS'
+ZV_ST_KEY_DATA_WARNINGS = 'ZV_VB_DATA_WARNINGS'
+ZV_ST_KEY_HASHES = 'ZV_VB_HASHES'
+ZV_ST_KEY_RUN_META = 'ZV_VB_RUN_META'
+ZV_ST_KEY_CHART_RESET = 'ZV_VB_CHART_RESET'
 
 for ZV_ST_KEY, ZV_OB_DEFAULT in ((ZV_ST_KEY_TABLES, None),
                                  (ZV_ST_KEY_RESULTS, None),
                                  (ZV_ST_KEY_STATUS, 'not_started'),
-                                 (ZV_ST_KEY_RESTORE, False)):
+                                 (ZV_ST_KEY_RESTORE, False),
+                                 (ZV_ST_KEY_UPLOAD_ERRORS, []),
+                                 (ZV_ST_KEY_TYPECAST_WARNINGS, []),
+                                 (ZV_ST_KEY_DATA_WARNINGS, []),
+                                 (ZV_ST_KEY_HASHES, {}),
+                                 (ZV_ST_KEY_RUN_META, None),
+                                 (ZV_ST_KEY_CHART_RESET, 0)):
     if ZV_ST_KEY not in PI_STREAMLIT.session_state:
         PI_STREAMLIT.session_state[ZV_ST_KEY] = ZV_OB_DEFAULT
 
 
 # ------------------------------------------------------- app-specific functions
-def FC_BUILD_TEMPLATE_BYTES() -> bytes:
-    """Headings only, tab-delimited, one block per table (definition p.4)."""
-    ZV_OB_BUFFER = PI_IO.StringIO()
-    for ZV_ST_TABLE, ZV_LI_FIELDS in ZV_DI_REQUIRED_TABLES.items():
-        ZV_OB_BUFFER.write(f'# {ZV_ST_TABLE}\n')
-        ZV_OB_BUFFER.write('\t'.join(ZV_LI_FIELDS) + '\n\n')
-    return ZV_OB_BUFFER.getvalue().encode('utf-8')
-
-
-def FC_READ_UPLOADS(ZVFCI_LI_OB_FILES) -> dict:
-    """Match each uploaded file to a table by its file stem: LFA1.txt -> LFA1."""
-    ZV_DI_TABLES = {}
-    ZV_LI_OB_FILES = list(ZVFCI_LI_OB_FILES or [])
-    ZV_OB_BAR = PI_STREAMLIT.progress(0)
-    for ZV_NU_INDEX, ZV_OB_FILE in enumerate(ZV_LI_OB_FILES):
-        ZV_ST_STEM = ZV_OB_FILE.name.rsplit('.', 1)[0].strip().upper()
-        if ZV_ST_STEM in ZV_DI_REQUIRED_TABLES:
-            try:
-                ZV_DI_TABLES[ZV_ST_STEM] = FC_IMPORT_TEXT(ZV_OB_FILE)
-            except Exception:
-                ZV_DI_TABLES[ZV_ST_STEM] = None
-        ZV_OB_BAR.progress((ZV_NU_INDEX + 1) / max(len(ZV_LI_OB_FILES), 1))
-    ZV_OB_BAR.empty()
-    return ZV_DI_TABLES
-
-
-def FC_CHECK_TABLES_AND_FIELDS(ZVFCI_DI_TABLES: dict) -> list:
-    """Empty list means every required table and field is present."""
-    ZV_LI_PROBLEMS = []
-    for ZV_ST_TABLE, ZV_LI_FIELDS in ZV_DI_REQUIRED_TABLES.items():
-        ZV_DF = ZVFCI_DI_TABLES.get(ZV_ST_TABLE)
-        if ZV_DF is None:
-            ZV_LI_PROBLEMS.append(f'Table {ZV_ST_TABLE} is missing.')
-            continue
-        ZV_LI_MISSING = [
-            ZV_ST_FIELD for ZV_ST_FIELD in ZV_LI_FIELDS
-            if ZV_ST_FIELD not in ZV_DF.columns
-        ]
-        if ZV_LI_MISSING:
-            ZV_LI_PROBLEMS.append(
-                f'Table {ZV_ST_TABLE} is missing field(s): '
-                + ', '.join(ZV_LI_MISSING)
-            )
-    return ZV_LI_PROBLEMS
-
-
-def FC_ADD_DESCRIPTION(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_DF_TEXT,
-                       ZVFCI_ST_TEXT_KEY: str, ZVFCI_ST_TEXT_COLUMN: str,
-                       ZVFCI_ST_TARGET: str):
-    """Code-description rule: every code is shown next to its description."""
-    ZV_DF_LOOKUP = (
-        ZVFCI_DF_TEXT
-        .select([ZVFCI_ST_TEXT_KEY, ZVFCI_ST_TEXT_COLUMN])
-        .unique(subset=[ZVFCI_ST_TEXT_KEY])
-        .rename({ZVFCI_ST_TEXT_KEY: ZVFCI_ST_CODE_COLUMN,
-                 ZVFCI_ST_TEXT_COLUMN: ZVFCI_ST_TARGET})
-    )
-    return ZVFCI_DF.join(ZV_DF_LOOKUP, on=ZVFCI_ST_CODE_COLUMN, how='left')
-
-
 def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
     """Join path and test rule exactly as defined on pages 3 and 5."""
     ZV_DF_LFA1 = ZVFCI_DI_TABLES['LFA1']
@@ -172,18 +137,20 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         ).alias('IS_EXCEPTION')
     )
 
+    # country descriptions go on the full population first, so the maps (which
+    # plot every supplier, not just the three-country exceptions) have them too
+    for ZV_ST_CODE, ZV_ST_TARGET in (('SONY_LAND1', 'SONY_COUNTRY'),
+                                     ('VENDOR_LAND1', 'VENDOR_COUNTRY'),
+                                     ('BANKS', 'BANK_COUNTRY')):
+        ZV_DF_VENDOR_BANK = FC_ADD_DESCRIPTION(
+            ZV_DF_VENDOR_BANK, ZV_ST_CODE, ZV_DF_T005T, 'LAND1', 'LANDX',
+            ZV_ST_TARGET
+        )
+
     ZV_NU_KPI1 = ZV_DF_VENDOR_BANK.select('LIFNR').n_unique()
     ZV_DF_EXCEPTIONS = ZV_DF_VENDOR_BANK.filter(PI_POLARS.col('IS_EXCEPTION'))
     ZV_NU_KPI2 = ZV_DF_EXCEPTIONS.select('LIFNR').n_unique()
     ZV_NU_KPI3 = (ZV_NU_KPI2 / ZV_NU_KPI1 * 100) if ZV_NU_KPI1 else 0.0
-
-    for ZV_ST_CODE, ZV_ST_TARGET in (('SONY_LAND1', 'SONY_COUNTRY'),
-                                     ('VENDOR_LAND1', 'VENDOR_COUNTRY'),
-                                     ('BANKS', 'BANK_COUNTRY')):
-        ZV_DF_EXCEPTIONS = FC_ADD_DESCRIPTION(
-            ZV_DF_EXCEPTIONS, ZV_ST_CODE, ZV_DF_T005T, 'LAND1', 'LANDX',
-            ZV_ST_TARGET
-        )
 
     ZV_DF_EXCEPTION_KEYS = ZV_DF_EXCEPTIONS.select(['LIFNR', 'BUKRS']).unique()
 
@@ -202,6 +169,7 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         ZV_DF_DOCS
         .join(ZV_DF_EXCEPTION_KEYS, on=['LIFNR', 'BUKRS'], how='inner')
         .join(ZV_DF_LFA1.select(['LIFNR', 'NAME1']), on='LIFNR', how='left')
+        .join(ZV_DF_T001.select(['BUKRS', 'BUTXT']), on='BUKRS', how='left')
     )
     ZV_DF_TRANSACTIONS = FC_ADD_DESCRIPTION(
         ZV_DF_TRANSACTIONS, 'BLART', ZV_DF_T003T, 'BLART', 'LTEXT',
@@ -214,6 +182,7 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         .rename({'ZBUKR': 'BUKRS'})
         .join(ZV_DF_EXCEPTION_KEYS, on=['LIFNR', 'BUKRS'], how='inner')
         .join(ZV_DF_LFA1.select(['LIFNR', 'NAME1']), on='LIFNR', how='left')
+        .join(ZV_DF_T001.select(['BUKRS', 'BUTXT']), on='BUKRS', how='left')
         .with_columns(PI_POLARS.col('VALUT').str.slice(0, 4).alias('VALUT_YEAR'))
     )
     ZV_DF_SETTLEMENTS = FC_ADD_DESCRIPTION(
@@ -228,120 +197,23 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         ZV_DF_LFBK.select(['LIFNR', 'BANKN'])
                   .unique()
                   .rename({'BANKN': 'ZBNKN'})
-                  .with_columns(PI_POLARS.lit('Y').alias('PAYEE_ON_MASTER'))
+                  .with_columns(PI_POLARS.lit('Y').alias('ACCOUNT_ON_MASTER'))
     )
     ZV_DF_SETTLEMENTS = (
         ZV_DF_SETTLEMENTS
         .join(ZV_DF_MASTER_ACCOUNTS, on=['LIFNR', 'ZBNKN'], how='left')
-        .with_columns(PI_POLARS.col('PAYEE_ON_MASTER').fill_null('N'))
+        .with_columns(PI_POLARS.col('ACCOUNT_ON_MASTER').fill_null('N'))
     )
 
     return {
         'KPI1': ZV_NU_KPI1,
         'KPI2': ZV_NU_KPI2,
         'KPI3': ZV_NU_KPI3,
+        'ALL_VENDORS': ZV_DF_VENDOR_BANK,
         'EXCEPTIONS': ZV_DF_EXCEPTIONS,
         'TRANSACTIONS': ZV_DF_TRANSACTIONS,
         'SETTLEMENTS': ZV_DF_SETTLEMENTS,
     }
-
-
-def FC_MAP_GRAPH(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_ST_NAME_COLUMN: str,
-                 ZVFCI_ST_TITLE: str, ZVFCI_ST_PARAM_NAME: str):
-    """Bubble map: one circle per country, sized and coloured by vendor count.
-
-    Uses the Vega-Lite params / select pattern so the chart is clickable, and
-    on_select='rerun' so a click re-runs the file and cross-filters everything.
-    """
-    ZV_DF_COUNTS = (
-        ZVFCI_DF
-        .group_by([ZVFCI_ST_CODE_COLUMN, ZVFCI_ST_NAME_COLUMN])
-        .agg(PI_POLARS.col('LIFNR').n_unique().alias('VENDORS'))
-    )
-
-    ZV_LI_DI_POINTS = []
-    for ZV_DI_ROW in ZV_DF_COUNTS.to_dicts():
-        ZV_TU_COORD = FC_COUNTRY_COORDINATES(ZV_DI_ROW[ZVFCI_ST_CODE_COLUMN])
-        if ZV_TU_COORD is None:
-            continue
-        ZV_LI_DI_POINTS.append({
-            'code': ZV_DI_ROW[ZVFCI_ST_CODE_COLUMN],
-            'country': ZV_DI_ROW[ZVFCI_ST_NAME_COLUMN],
-            'vendors': ZV_DI_ROW['VENDORS'],
-            'lat': ZV_TU_COORD[0],
-            'lon': ZV_TU_COORD[1],
-        })
-
-    if not ZV_LI_DI_POINTS:
-        PI_STREAMLIT.info(f'{ZVFCI_ST_TITLE}: nothing to plot.')
-        return None
-
-    return PI_STREAMLIT.vega_lite_chart(
-        {
-            'title': ZVFCI_ST_TITLE,
-            'height': 230,
-            'projection': {'type': 'equalEarth'},
-            'layer': [
-                {
-                    'data': {
-                        'url': 'https://cdn.jsdelivr.net/npm/vega-datasets@2/'
-                               'data/world-110m.json',
-                        'format': {'type': 'topojson', 'feature': 'countries'},
-                    },
-                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
-                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
-                },
-                {
-                    'data': {'values': ZV_LI_DI_POINTS},
-                    'params': [{
-                        'name': ZVFCI_ST_PARAM_NAME,
-                        'select': {'type': 'point', 'fields': ['code']},
-                    }],
-                    'mark': {'type': 'circle', 'tooltip': True,
-                             'opacity': 0.82},
-                    'encoding': {
-                        'longitude': {'field': 'lon', 'type': 'quantitative'},
-                        'latitude': {'field': 'lat', 'type': 'quantitative'},
-                        'size': {'field': 'vendors', 'type': 'quantitative',
-                                 'scale': {'range': [16, 260]}, 'legend': None},
-                        'color': {
-                            'condition': {
-                                'param': ZVFCI_ST_PARAM_NAME,
-                                'field': 'vendors', 'type': 'quantitative',
-                                'scale': {'scheme': 'blues'},
-                                'legend': {'title': 'Vendors'},
-                            },
-                            'value': '#C8CFDA',
-                        },
-                        'tooltip': [
-                            {'field': 'country', 'title': 'Country'},
-                            {'field': 'code', 'title': 'Key'},
-                            {'field': 'vendors', 'title': 'Vendors'},
-                        ],
-                    },
-                },
-            ],
-        },
-        use_container_width=True,
-        on_select='rerun',
-        key=f'chart_{ZVFCI_ST_PARAM_NAME}',
-    )
-
-
-def FC_SHOW_TABLE(ZVFCI_ST_TITLE: str, ZVFCI_DF, ZVFCI_ST_FILENAME: str,
-                  ZVFCI_ST_KEY: str) -> None:
-    """Table with a Download Excel button, per the shared-function standard."""
-    with PI_STREAMLIT.container(border=True):
-        PI_STREAMLIT.markdown(
-            f'**{ZVFCI_ST_TITLE}**   *:grey[{ZVFCI_DF.height:,} rows]*'
-        )
-        FC_DOWNLOAD_BUTTON(
-            ZVFCI_BY_DATA=FC_GET_EXCEL_BYTES(ZVFCI_DF=ZVFCI_DF),
-            ZVFCI_ST_FILENAME=ZVFCI_ST_FILENAME,
-            ZVFCI_ST_LABEL='Download Excel',
-            ZVFCI_ST_KEY=ZVFCI_ST_KEY,
-        )
-        PI_STREAMLIT.dataframe(ZVFCI_DF, hide_index=True, **ZV_DI_WIDTH)
 
 
 # ------------------------------------------------------------------- sidebar
@@ -353,31 +225,12 @@ with PI_STREAMLIT.sidebar:
     )
     PI_STREAMLIT.markdown('---')
 
-    ZV_LI_ST_COMPANY_FILTER = []
     ZV_DI_TABLES_STATE = PI_STREAMLIT.session_state[ZV_ST_KEY_TABLES] or {}
-    if ZV_DI_TABLES_STATE.get('T001') is not None:
-        ZV_LI_DI_COMPANIES = (
-            ZV_DI_TABLES_STATE['T001'].select(['BUKRS', 'BUTXT'])
-                                      .unique().sort('BUKRS').to_dicts()
-        )
-        ZV_LI_ST_ALL = [ZV_DI['BUKRS'] for ZV_DI in ZV_LI_DI_COMPANIES]
-        ZV_LI_ST_COMPANY_FILTER = PI_STREAMLIT.multiselect(
-            'Company code (BUKRS)',
-            ZV_LI_ST_ALL,
-            default=ZV_LI_ST_ALL,
-            format_func=lambda ZV_ST_CODE: next(
-                (f"{ZV_DI['BUKRS']} - {ZV_DI['BUTXT']}"
-                 for ZV_DI in ZV_LI_DI_COMPANIES
-                 if ZV_DI['BUKRS'] == ZV_ST_CODE), ZV_ST_CODE
-            ),
-        )
-    else:
-        PI_STREAMLIT.markdown(
-            '*:grey[The company code filter appears once T001 is uploaded.]*'
-        )
 
-    PI_STREAMLIT.markdown('---')
-    PI_STREAMLIT.markdown('*:grey[Status]*')
+    PI_STREAMLIT.markdown(
+        '<p style="color:#FFFFFF; font-style: italic; margin: 0;">Status</p>',
+        unsafe_allow_html=True,
+    )
     ZV_ST_STATUS_RAW = PI_STREAMLIT.session_state[ZV_ST_KEY_STATUS]
     if ZV_ST_STATUS_RAW == 'analysis_run':
         FC_STATUS_PILL('Analysis complete', 'ok')
@@ -393,12 +246,6 @@ with PI_STREAMLIT.sidebar:
 
 
 # --------------------------------------------------- 1. input & configuration
-PI_STREAMLIT.title('Vendor bank app')
-PI_STREAMLIT.caption(
-    'Audit question: does Sony have vendors where the Sony company country, '
-    'the vendor country and the bank country are all three different?'
-)
-
 FC_SECTION_HEADER(
     '1',
     'Input & Configuration',
@@ -421,18 +268,21 @@ with ZV_OB_COL_UPLOAD:
 
 with ZV_OB_COL_INFO:
     with PI_STREAMLIT.container(border=True):
-        PI_STREAMLIT.markdown('**1.2 Required tables and fields.**')
+        PI_STREAMLIT.markdown('**1.2 Required tables/fields.**')
         with PI_STREAMLIT.expander('Show the list'):
             for ZV_ST_TABLE, ZV_LI_FIELDS in ZV_DI_REQUIRED_TABLES.items():
                 PI_STREAMLIT.markdown(
                     f'**{ZV_ST_TABLE}** — {", ".join(ZV_LI_FIELDS)}'
                 )
+        PI_STREAMLIT.markdown(
+            '*:grey[tables and field names required for each table.]*'
+        )
 
 with ZV_OB_COL_TEMPLATE:
     with PI_STREAMLIT.container(border=True):
         PI_STREAMLIT.markdown('**1.3 Template files.**')
         FC_DOWNLOAD_BUTTON(
-            ZVFCI_BY_DATA=FC_BUILD_TEMPLATE_BYTES(),
+            ZVFCI_BY_DATA=FC_BUILD_TEMPLATE_BYTES(ZV_DI_REQUIRED_TABLES),
             ZVFCI_ST_FILENAME='VENDOR_BANK_TEMPLATES.txt',
             ZVFCI_ST_LABEL='Download headings',
             ZVFCI_ST_KEY='vb_template',
@@ -442,12 +292,17 @@ with ZV_OB_COL_TEMPLATE:
         )
 
 if ZV_LI_OB_UPLOADS:
-    PI_STREAMLIT.session_state[ZV_ST_KEY_TABLES] = FC_READ_UPLOADS(
-        ZV_LI_OB_UPLOADS
+    ZV_DI_UPLOADED, ZV_LI_UPLOAD_ERRS, ZV_DI_HASHES = FC_READ_UPLOADS(
+        ZV_LI_OB_UPLOADS, ZV_DI_REQUIRED_TABLES
     )
-    if PI_STREAMLIT.session_state[ZV_ST_KEY_TABLES]:
+    ZV_DI_UPLOADED, ZV_LI_TYPECAST_WARN = FC_TYPECAST_TABLES(ZV_DI_UPLOADED)
+    PI_STREAMLIT.session_state[ZV_ST_KEY_TABLES] = ZV_DI_UPLOADED
+    PI_STREAMLIT.session_state[ZV_ST_KEY_UPLOAD_ERRORS] = ZV_LI_UPLOAD_ERRS
+    PI_STREAMLIT.session_state[ZV_ST_KEY_TYPECAST_WARNINGS] = ZV_LI_TYPECAST_WARN
+    PI_STREAMLIT.session_state[ZV_ST_KEY_HASHES] = ZV_DI_HASHES
+    if ZV_DI_UPLOADED:
         FC_SNAPSHOT_SAVE(
-            PI_STREAMLIT.session_state[ZV_ST_KEY_TABLES],
+            ZV_DI_UPLOADED,
             PI_STREAMLIT.session_state.get(ZV_ST_KEY_RESULTS),
             PI_STREAMLIT.session_state.get(ZV_ST_KEY_STATUS, 'not_started'),
         )
@@ -488,12 +343,17 @@ with PI_STREAMLIT.container(border=True):
         PI_STREAMLIT.markdown('*:grey[No files uploaded yet.]*')
     else:
         PI_STREAMLIT.success(f'Selected {len(ZV_LI_OB_UPLOADS)} file(s)')
+        ZV_DI_HASHES = PI_STREAMLIT.session_state.get(ZV_ST_KEY_HASHES, {})
         for ZV_OB_FILE in ZV_LI_OB_UPLOADS:
             ZV_ST_STEM = ZV_OB_FILE.name.rsplit('.', 1)[0].strip().upper()
             ZV_DF_PREVIEW = ZV_DI_TABLES.get(ZV_ST_STEM)
+            ZV_ST_HASH = ZV_DI_HASHES.get(ZV_ST_STEM, '')
             ZV_ST_ROWS = (f'{ZV_DF_PREVIEW.height:,} rows'
                           if ZV_DF_PREVIEW is not None else 'not recognised')
-            with PI_STREAMLIT.expander(f'{ZV_OB_FILE.name}  —  {ZV_ST_ROWS}'):
+            ZV_ST_HASH_TXT = (f' · sha256 {ZV_ST_HASH}'
+                              if ZV_ST_HASH else '')
+            with PI_STREAMLIT.expander(
+                    f'{ZV_OB_FILE.name}  —  {ZV_ST_ROWS}{ZV_ST_HASH_TXT}'):
                 if ZV_DF_PREVIEW is not None:
                     PI_STREAMLIT.dataframe(ZV_DF_PREVIEW.head(20),
                                            hide_index=True, **ZV_DI_WIDTH)
@@ -501,9 +361,28 @@ with PI_STREAMLIT.container(border=True):
                     PI_STREAMLIT.warning(
                         'The file name does not match a required table.'
                     )
+        # loud upload errors
+        for ZV_ST_FNAME, ZV_ST_REASON in PI_STREAMLIT.session_state.get(
+                ZV_ST_KEY_UPLOAD_ERRORS, []):
+            PI_STREAMLIT.error(f'{ZV_ST_FNAME}: {ZV_ST_REASON}')
 
-ZV_LI_PROBLEMS = FC_CHECK_TABLES_AND_FIELDS(ZV_DI_TABLES)
+ZV_LI_PROBLEMS = FC_CHECK_TABLES_AND_FIELDS(ZV_DI_TABLES, ZV_DI_REQUIRED_TABLES)
 ZV_BO_DATA_COMPLETE = len(ZV_LI_PROBLEMS) == 0
+
+# data-quality warnings (not blockers): typecast + table checks
+ZV_LI_DATA_WARN = FC_CHECK_TABLE_WARNINGS(ZV_DI_TABLES, ZV_DI_REQUIRED_TABLES)
+ZV_LI_DATA_WARN += [
+    f"Table {ZV_DI['table']}: column {ZV_DI['column']} has "
+    f"{ZV_DI['failed']:,} unparsable value(s)"
+    + (f" (e.g. '{ZV_DI['example']}')" if ZV_DI['example'] else '')
+    for ZV_DI in PI_STREAMLIT.session_state.get(
+        ZV_ST_KEY_TYPECAST_WARNINGS, [])
+]
+if ZV_LI_DATA_WARN:
+    PI_STREAMLIT.warning(
+        'Data quality warnings (the analysis still runs):\n\n'
+        + '\n\n'.join(f'- {ZV_W}' for ZV_W in ZV_LI_DATA_WARN)
+    )
 
 # Run Analysis gets most of the space, Start Over stays compact on the right
 ZV_OB_COL_RUN, ZV_OB_COL_CLEAR = PI_STREAMLIT.columns([5, 1])
@@ -523,6 +402,7 @@ if ZV_BO_CLEAR:
     PI_STREAMLIT.session_state[ZV_ST_KEY_RESULTS] = None
     PI_STREAMLIT.session_state[ZV_ST_KEY_STATUS] = 'not_started'
     PI_STREAMLIT.session_state[ZV_ST_KEY_RESTORE] = False
+    PI_STREAMLIT.session_state[ZV_ST_KEY_CHART_RESET] = 0
     PI_STREAMLIT.rerun()
 
 if ZV_LI_OB_UPLOADS and not ZV_BO_DATA_COMPLETE:
@@ -533,6 +413,11 @@ elif ZV_LI_OB_UPLOADS:
 if ZV_BO_RUN_PROCESSING and ZV_BO_DATA_COMPLETE:
     PI_STREAMLIT.session_state[ZV_ST_KEY_RESULTS] = FC_RUN_ANALYSIS(ZV_DI_TABLES)
     PI_STREAMLIT.session_state[ZV_ST_KEY_STATUS] = 'analysis_run'
+    PI_STREAMLIT.session_state[ZV_ST_KEY_RUN_META] = {
+        'time': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'hashes': dict(PI_STREAMLIT.session_state.get(ZV_ST_KEY_HASHES, {})),
+        'encrypted': FC_SNAPSHOT_IS_ENCRYPTED(),
+    }
     FC_SNAPSHOT_SAVE(
         ZV_DI_TABLES,
         PI_STREAMLIT.session_state[ZV_ST_KEY_RESULTS],
@@ -553,81 +438,171 @@ if ZV_DI_RESULTS is None:
 FC_SECTION_HEADER(
     '2',
     'Processing Results',
-    'The maps and tables below show the exceptions only — the vendors for '
-    'which the three countries all differ.',
+    'The maps show every supplier; the tables below show the exceptions '
+    'only — the vendors for which the three countries all differ.',
 )
 
+ZV_DF_ALL_VENDORS_FULL = ZV_DI_RESULTS['ALL_VENDORS']
+ZV_DF_ALL_VENDORS = ZV_DF_ALL_VENDORS_FULL
 ZV_DF_EXCEPTIONS = ZV_DI_RESULTS['EXCEPTIONS']
 ZV_DF_TRANSACTIONS = ZV_DI_RESULTS['TRANSACTIONS']
 ZV_DF_SETTLEMENTS = ZV_DI_RESULTS['SETTLEMENTS']
 
-if ZV_LI_ST_COMPANY_FILTER:
+# The filter widgets themselves render further down (next to the detail
+# tables they visually belong to), but their values must be known now, so
+# KPI1-3 and the maps can react to them too. Same trick as the map-click
+# selections just below: a widget's session_state value from the previous
+# run is already there under its key before that widget is drawn again
+# later this same run.
+ZV_LI_SEL_BUKRS = PI_STREAMLIT.session_state.get('flt_bukrs', [])
+ZV_LI_SEL_VENDOR_LAND1 = PI_STREAMLIT.session_state.get('flt_vendor_country', [])
+ZV_LI_SEL_BANKS = PI_STREAMLIT.session_state.get('flt_bank_country', [])
+ZV_LI_SEL_LIFNR = PI_STREAMLIT.session_state.get('flt_vendor', [])
+
+# Read each map's current click from session_state (Streamlit updates a
+# keyed widget's state *before* the script reruns, so whichever map was
+# just clicked already has its new value here — before any of the four
+# maps is drawn again below). Reading this before the KPI section, not just
+# before the maps, is what lets a map click move the KPIs too — same as the
+# filter boxes above.
+#
+# The widget keys carry a reset counter: clearing the map filters bumps the
+# counter so every chart gets a brand-new key and Streamlit rebuilds the
+# component — which also drops the browser-side Vega-Lite selection (the
+# highlighted bubble). Popping session_state alone cannot do that.
+ZV_NU_CHART_RESET = PI_STREAMLIT.session_state.get(ZV_ST_KEY_CHART_RESET, 0)
+ZV_ST_CHART_SUFFIX = f'_{ZV_NU_CHART_RESET}'
+ZV_OB_SEL_SONY = FC_GET_SELECTION_VALUE(
+    PI_STREAMLIT.session_state.get(
+        f'chart_ZV_SONY_SELECTION{ZV_ST_CHART_SUFFIX}'),
+    'ZV_SONY_SELECTION',
+)
+ZV_OB_SEL_VENDOR = FC_GET_SELECTION_VALUE(
+    PI_STREAMLIT.session_state.get(
+        f'chart_ZV_VENDOR_SELECTION{ZV_ST_CHART_SUFFIX}'),
+    'ZV_VENDOR_SELECTION',
+)
+ZV_OB_SEL_BANK = FC_GET_SELECTION_VALUE(
+    PI_STREAMLIT.session_state.get(
+        f'chart_ZV_BANK_SELECTION{ZV_ST_CHART_SUFFIX}'),
+    'ZV_BANK_SELECTION',
+)
+ZV_LI_ST_SEL_ROLE = FC_GET_SELECTION_VALUE(
+    PI_STREAMLIT.session_state.get(
+        f'chart_role_overlap{ZV_ST_CHART_SUFFIX}'),
+    'ZV_ROLE_SELECTION',
+)
+
+# -------- combine every filter dimension --------
+# Different dimensions combine with AND (each one narrows the set). Values
+# within the SAME dimension — the multiselect box and a map click on the
+# same column — combine with OR (their union), so e.g. Vendor country box
+# = PA plus a Vendor map click on CN means "PA or CN", never an empty
+# intersection.
+ZV_DI_FILTER_DIMENSIONS = [
+    ('BUKRS', ZV_LI_SEL_BUKRS, []),
+    ('VENDOR_LAND1', ZV_LI_SEL_VENDOR_LAND1, ZV_OB_SEL_VENDOR),
+    ('BANKS', ZV_LI_SEL_BANKS, ZV_OB_SEL_BANK),
+    ('SONY_LAND1', [], ZV_OB_SEL_SONY),
+    ('LIFNR', ZV_LI_SEL_LIFNR, []),
+]
+for ZV_ST_COLUMN, ZV_LI_MS_VALUES, ZV_LI_MAP_VALUES in ZV_DI_FILTER_DIMENSIONS:
+    ZV_LI_VALUES = list(dict.fromkeys([*ZV_LI_MS_VALUES, *ZV_LI_MAP_VALUES]))
+    if ZV_LI_VALUES:
+        ZV_DF_ALL_VENDORS = ZV_DF_ALL_VENDORS.filter(
+            PI_POLARS.col(ZV_ST_COLUMN).is_in(ZV_LI_VALUES))
+        ZV_DF_EXCEPTIONS = ZV_DF_EXCEPTIONS.filter(
+            PI_POLARS.col(ZV_ST_COLUMN).is_in(ZV_LI_VALUES))
+
+# A click on the role-overlap map behaves like the other three maps: the
+# clicked country becomes a filter that narrows everything — KPI1, KPI2, the
+# three bubble maps, the role-overlap map itself, and the tables below — down
+# to vendors touching that country in any of its three roles (Sony, vendor
+# or bank). Same OR-within-dimension semantics as the other maps: the role
+# selection joins the SONY/VENDOR/BANK/LIFNR filter dimensions, not a new
+# one, so it combines with them by AND across dimensions.
+if ZV_LI_ST_SEL_ROLE:
+    ZV_LI_ST_ROLE_CODES = ZV_LI_ST_SEL_ROLE  # already country codes
+    ZV_DF_ALL_VENDORS = ZV_DF_ALL_VENDORS.filter(
+        PI_POLARS.col('SONY_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('VENDOR_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('BANKS').is_in(ZV_LI_ST_ROLE_CODES)
+    )
     ZV_DF_EXCEPTIONS = ZV_DF_EXCEPTIONS.filter(
-        PI_POLARS.col('BUKRS').is_in(ZV_LI_ST_COMPANY_FILTER))
-    ZV_DF_TRANSACTIONS = ZV_DF_TRANSACTIONS.filter(
-        PI_POLARS.col('BUKRS').is_in(ZV_LI_ST_COMPANY_FILTER))
-    ZV_DF_SETTLEMENTS = ZV_DF_SETTLEMENTS.filter(
-        PI_POLARS.col('BUKRS').is_in(ZV_LI_ST_COMPANY_FILTER))
+        PI_POLARS.col('SONY_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('VENDOR_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('BANKS').is_in(ZV_LI_ST_ROLE_CODES)
+    )
 
 with PI_STREAMLIT.container(border=True):
     FC_SECTION_HEADER(
         '2.1', 'Overview Results',
-        'Three KPIs on the flagged population.'
+        'Reacts to filters and map clicks.'
     )
+    ZV_NU_KPI1 = ZV_DF_ALL_VENDORS.select('LIFNR').n_unique()
+    ZV_NU_KPI2 = ZV_DF_EXCEPTIONS.select('LIFNR').n_unique()
+    ZV_NU_KPI3 = (ZV_NU_KPI2 / ZV_NU_KPI1 * 100) if ZV_NU_KPI1 else 0.0
     ZV_OB_KPI1, ZV_OB_KPI2, ZV_OB_KPI3 = PI_STREAMLIT.columns(3)
-    ZV_OB_KPI1.metric('Vendors', f"{ZV_DI_RESULTS['KPI1']:,}",
+    ZV_OB_KPI1.metric('Vendors', f'{ZV_NU_KPI1:,}',
                       help='KPI 1 — total vendors in scope')
-    ZV_OB_KPI2.metric('Vendors flagged', f"{ZV_DI_RESULTS['KPI2']:,}",
+    ZV_OB_KPI2.metric('Vendors flagged', f'{ZV_NU_KPI2:,}',
                       help='KPI 2 — vendors with three different countries')
-    ZV_OB_KPI3.metric('Flagged share', f"{ZV_DI_RESULTS['KPI3']:.1f}%",
+    ZV_OB_KPI3.metric('Flagged share', f'{ZV_NU_KPI3:.1f}%',
                       help='KPI 3 — KPI 2 as a share of KPI 1')
 
 with PI_STREAMLIT.container(border=True):
     FC_SECTION_HEADER(
         '2.2', 'Map graphs',
-        'Click a bubble on any map to cross-filter the other maps and the '
-        'tables below. Click it again to clear.'
+        'Click a bubble or a country to filter everything below.'
     )
-    ZV_OB_MAP1, ZV_OB_MAP2, ZV_OB_MAP3 = PI_STREAMLIT.columns(3)
-    with ZV_OB_MAP1:
-        ZV_OB_CHART_SONY = FC_MAP_GRAPH(
-            ZV_DF_EXCEPTIONS, 'SONY_LAND1', 'SONY_COUNTRY',
-            'Sony country (T001_LAND1)', 'ZV_SONY_SELECTION'
+    if ZV_OB_SEL_SONY or ZV_OB_SEL_VENDOR or ZV_OB_SEL_BANK or ZV_LI_ST_SEL_ROLE:
+        _, ZV_OB_FILTER_BUTTON = PI_STREAMLIT.columns([5, 1])
+        with ZV_OB_FILTER_BUTTON:
+            if PI_STREAMLIT.button('Clear map filters',
+                                   key='btn_clear_map_filters'):
+                # Bump the chart-reset counter: every map gets a fresh widget
+                # key next run, so Streamlit rebuilds each chart component and
+                # the browser-side Vega-Lite selection (highlighted bubble /
+                # dimmed countries) is dropped too — not just the Python-side
+                # selection value.
+                PI_STREAMLIT.session_state[ZV_ST_KEY_CHART_RESET] = (
+                    ZV_NU_CHART_RESET + 1
+                )
+                PI_STREAMLIT.rerun()
+
+    ZV_OB_MAP_ROW1_COL1, ZV_OB_MAP_ROW1_COL2 = PI_STREAMLIT.columns(2)
+    ZV_OB_MAP_ROW2_COL1, ZV_OB_MAP_ROW2_COL2 = PI_STREAMLIT.columns(2)
+    with ZV_OB_MAP_ROW1_COL1:
+        FC_MAP_GRAPH(
+            ZV_DF_ALL_VENDORS, 'SONY_LAND1', 'SONY_COUNTRY',
+            'Sony country (T001_LAND1)', 'ZV_SONY_SELECTION',
+            ZVFCI_ST_WIDGET_KEY=f'chart_ZV_SONY_SELECTION{ZV_ST_CHART_SUFFIX}',
         )
-    with ZV_OB_MAP2:
-        ZV_OB_CHART_VENDOR = FC_MAP_GRAPH(
-            ZV_DF_EXCEPTIONS, 'VENDOR_LAND1', 'VENDOR_COUNTRY',
-            'Vendor country (LFA1_LAND1)', 'ZV_VENDOR_SELECTION'
+    with ZV_OB_MAP_ROW1_COL2:
+        FC_MAP_GRAPH(
+            ZV_DF_ALL_VENDORS, 'VENDOR_LAND1', 'VENDOR_COUNTRY',
+            'Vendor country (LFA1_LAND1)', 'ZV_VENDOR_SELECTION',
+            ZVFCI_ST_WIDGET_KEY=(
+                f'chart_ZV_VENDOR_SELECTION{ZV_ST_CHART_SUFFIX}'),
         )
-    with ZV_OB_MAP3:
-        ZV_OB_CHART_BANK = FC_MAP_GRAPH(
-            ZV_DF_EXCEPTIONS, 'BANKS', 'BANK_COUNTRY',
-            'Vendor bank (LFBK_BANKS)', 'ZV_BANK_SELECTION'
+    with ZV_OB_MAP_ROW2_COL1:
+        FC_MAP_GRAPH(
+            ZV_DF_ALL_VENDORS, 'BANKS', 'BANK_COUNTRY',
+            'Vendor bank (LFBK_BANKS)', 'ZV_BANK_SELECTION',
+            ZVFCI_ST_WIDGET_KEY=f'chart_ZV_BANK_SELECTION{ZV_ST_CHART_SUFFIX}',
+        )
+    with ZV_OB_MAP_ROW2_COL2:
+        FC_MAP_ROLE_OVERLAP(
+            ZV_DF_ALL_VENDORS,
+            ZVFCI_ST_WIDGET_KEY=f'chart_role_overlap{ZV_ST_CHART_SUFFIX}',
         )
 
-# cross-filtering, per the shared-function pattern in the Streamlit chapter
-for ZV_OB_CHART, ZV_ST_PARAM, ZV_ST_COLUMN in (
-        (ZV_OB_CHART_SONY, 'ZV_SONY_SELECTION', 'SONY_LAND1'),
-        (ZV_OB_CHART_VENDOR, 'ZV_VENDOR_SELECTION', 'VENDOR_LAND1'),
-        (ZV_OB_CHART_BANK, 'ZV_BANK_SELECTION', 'BANKS')):
-    ZV_OB_SELECTION = FC_GET_SELECTION_VALUE(
-        ZVFCI_OB_CHART_DATA=ZV_OB_CHART,
-        ZVFCI_ST_PARAM_NAME=ZV_ST_PARAM,
-    )
-    ZV_DF_EXCEPTIONS = FC_FILTER_BY_CATEGORY_SELECTION(
-        ZVFCI_DF=ZV_DF_EXCEPTIONS,
-        ZVFCI_OB_SELECTION=ZV_OB_SELECTION,
-        ZVFCI_ST_CATEGORY_COLUMN=ZV_ST_COLUMN,
-    )
-
-ZV_LI_ST_SELECTED_VENDORS = (
-    ZV_DF_EXCEPTIONS.select('LIFNR').unique().to_series().to_list()
+ZV_DF_SELECTED_KEYS = ZV_DF_EXCEPTIONS.select(['LIFNR', 'BUKRS']).unique()
+ZV_DF_TRANSACTIONS = ZV_DF_TRANSACTIONS.join(
+    ZV_DF_SELECTED_KEYS, on=['LIFNR', 'BUKRS'], how='inner',
 )
-ZV_DF_TRANSACTIONS = ZV_DF_TRANSACTIONS.filter(
-    PI_POLARS.col('LIFNR').is_in(ZV_LI_ST_SELECTED_VENDORS)
-)
-ZV_DF_SETTLEMENTS = ZV_DF_SETTLEMENTS.filter(
-    PI_POLARS.col('LIFNR').is_in(ZV_LI_ST_SELECTED_VENDORS)
+ZV_DF_SETTLEMENTS = ZV_DF_SETTLEMENTS.join(
+    ZV_DF_SELECTED_KEYS, on=['LIFNR', 'BUKRS'], how='inner',
 )
 
 FC_SECTION_HEADER(
@@ -635,44 +610,119 @@ FC_SECTION_HEADER(
     'Download each table to Excel, or browse it here.'
 )
 
+PI_STREAMLIT.markdown(
+    '**Filters** — *:grey[leave a box empty to include everything.]*'
+)
+ZV_OB_FILTER1, ZV_OB_FILTER2, ZV_OB_FILTER3, ZV_OB_FILTER4 = (
+    PI_STREAMLIT.columns(4)
+)
+with ZV_OB_FILTER1:
+    FC_CATEGORY_MULTISELECT(
+        ZV_DF_ALL_VENDORS_FULL, 'BUKRS', 'BUTXT',
+        'Company code', 'flt_bukrs'
+    )
+with ZV_OB_FILTER2:
+    FC_CATEGORY_MULTISELECT(
+        ZV_DF_ALL_VENDORS_FULL, 'VENDOR_LAND1', 'VENDOR_COUNTRY',
+        'Vendor country', 'flt_vendor_country'
+    )
+with ZV_OB_FILTER3:
+    FC_CATEGORY_MULTISELECT(
+        ZV_DF_ALL_VENDORS_FULL, 'BANKS', 'BANK_COUNTRY',
+        'Bank country', 'flt_bank_country'
+    )
+with ZV_OB_FILTER4:
+    FC_CATEGORY_MULTISELECT(
+        ZV_DF_ALL_VENDORS_FULL, 'LIFNR', 'NAME1',
+        'Vendor', 'flt_vendor'
+    )
+
 ZV_OB_TAB_VENDORS, ZV_OB_TAB_DOCS, ZV_OB_TAB_PAY = PI_STREAMLIT.tabs(
     ['Vendors', 'Transactions', 'Payment settlements']
 )
 
+# 300Framework SAP field naming: a code field carries its description in the
+# same field (ZF_<Table>_<CodeField>_<DescField>, joined with a bare '-'),
+# not two separate columns.
+ZV_DF_VENDORS_DISPLAY = ZV_DF_EXCEPTIONS.select([
+    'BUKRS', 'BUTXT', 'SONY_LAND1', 'SONY_COUNTRY',
+    'LIFNR', 'NAME1', 'VENDOR_LAND1', 'VENDOR_COUNTRY', 'ORT01', 'STRAS',
+    'BANKS', 'BANK_COUNTRY', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
+    'LOEVM', 'SPERR',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_LFB1_BUKRS_BUTXT'),
+        ('SONY_LAND1', 'SONY_COUNTRY', 'ZF_T001_LAND1_LANDX'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('VENDOR_LAND1', 'VENDOR_COUNTRY', 'ZF_LFA1_LAND1_LANDX'),
+        ('BANKS', 'BANK_COUNTRY', 'ZF_LFBK_BANKS_LANDX')):
+    ZV_DF_VENDORS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_VENDORS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_VENDORS_DISPLAY = ZV_DF_VENDORS_DISPLAY.select([
+    'ZF_LFB1_BUKRS_BUTXT', 'ZF_T001_LAND1_LANDX',
+    'ZF_LFA1_LIFNR_NAME1', 'ZF_LFA1_LAND1_LANDX', 'ORT01', 'STRAS',
+    'ZF_LFBK_BANKS_LANDX', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
+    'LOEVM', 'SPERR',
+])
+
+ZV_DF_TRANSACTIONS_DISPLAY = ZV_DF_TRANSACTIONS.select([
+    'BUKRS', 'BUTXT', 'LIFNR', 'NAME1', 'BELNR', 'GJAHR', 'BUDAT',
+    'BLART', 'DOCUMENT_TYPE', 'WRBTR', 'WAERS', 'SHKZG',
+    'BVTYP', 'AUGBL', 'SOURCE',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_T001_BUKRS_BUTXT'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('BLART', 'DOCUMENT_TYPE', 'ZF_T003T_BLART_LTEXT')):
+    ZV_DF_TRANSACTIONS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_TRANSACTIONS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_TRANSACTIONS_DISPLAY = ZV_DF_TRANSACTIONS_DISPLAY.select([
+    'ZF_T001_BUKRS_BUTXT', 'ZF_LFA1_LIFNR_NAME1', 'BELNR', 'GJAHR', 'BUDAT',
+    'ZF_T003T_BLART_LTEXT', 'WRBTR', 'WAERS', 'SHKZG',
+    'BVTYP', 'AUGBL', 'SOURCE',
+])
+
+ZV_DF_SETTLEMENTS_DISPLAY = ZV_DF_SETTLEMENTS.select([
+    'BUKRS', 'BUTXT', 'LIFNR', 'NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
+    'ZBNKS', 'PAID_BANK_COUNTRY', 'ZBNKL', 'ZBNKN',
+    'ACCOUNT_ON_MASTER', 'RZAWE',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_T001_BUKRS_BUTXT'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('ZBNKS', 'PAID_BANK_COUNTRY', 'ZF_T005T_ZBNKS_LANDX')):
+    ZV_DF_SETTLEMENTS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_SETTLEMENTS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_SETTLEMENTS_DISPLAY = ZV_DF_SETTLEMENTS_DISPLAY.select([
+    'ZF_T001_BUKRS_BUTXT', 'ZF_LFA1_LIFNR_NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
+    'ZF_T005T_ZBNKS_LANDX', 'ZBNKL', 'ZBNKN',
+    'ACCOUNT_ON_MASTER', 'RZAWE',
+])
+
 with ZV_OB_TAB_VENDORS:
     FC_SHOW_TABLE(
         'Table 1 — List of vendors',
-        ZV_DF_EXCEPTIONS.select([
-            'BUKRS', 'BUTXT', 'SONY_LAND1', 'SONY_COUNTRY',
-            'LIFNR', 'NAME1', 'VENDOR_LAND1', 'VENDOR_COUNTRY', 'ORT01', 'STRAS',
-            'BANKS', 'BANK_COUNTRY', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
-            'LOEVM', 'SPERR',
-        ]),
+        ZV_DF_VENDORS_DISPLAY,
         'VENDOR_BANK_VENDORS.xlsx', 'download_button_1'
     )
 
 with ZV_OB_TAB_DOCS:
     FC_SHOW_TABLE(
         'Table 2 — List of vendor transactions (BSAK / BSIK)',
-        ZV_DF_TRANSACTIONS.select([
-            'BUKRS', 'LIFNR', 'NAME1', 'BELNR', 'GJAHR', 'BUDAT',
-            'BLART', 'DOCUMENT_TYPE', 'WRBTR', 'WAERS', 'SHKZG',
-            'BVTYP', 'AUGBL', 'SOURCE',
-        ]),
+        ZV_DF_TRANSACTIONS_DISPLAY,
         'VENDOR_BANK_TRANSACTIONS.xlsx', 'download_button_2'
     )
 
 with ZV_OB_TAB_PAY:
     FC_SHOW_TABLE(
         'Table 3 — List of payment settlements (REGUH)',
-        ZV_DF_SETTLEMENTS.select([
-            'BUKRS', 'LIFNR', 'NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
-            'ZBNKS', 'PAID_BANK_COUNTRY', 'ZBNKL', 'ZBNKN',
-            'PAYEE_ON_MASTER', 'RZAWE',
-        ]),
+        ZV_DF_SETTLEMENTS_DISPLAY,
         'VENDOR_BANK_SETTLEMENTS.xlsx', 'download_button_3'
     )
     PI_STREAMLIT.markdown(
-        "*:grey[**Note:** PAYEE_ON_MASTER = N means the payment went to an "
+        "*:grey[**Note:** ACCOUNT_ON_MASTER = N means the payment went to an "
         "account that is not on the vendor master (LFBK).]*"
     )

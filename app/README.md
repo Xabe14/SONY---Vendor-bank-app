@@ -6,14 +6,41 @@ country and the bank country are all three different?
 Layout follows page 4 of the vendor bank app definition; tables, fields and join
 path follow page 5. Streamlit patterns follow the 300Framework Streamlit chapter.
 
-## Run
+## Run (local machine)
 
-    pip install -r 00_CODE/requirements.txt
-    cd 00_CODE
-    streamlit run FC_VENDOR_BANK_APP.py
+Requires **Python 3.10+** and **Git** (optional, for cloning). On Windows use
+`python` from the Python.org installer; on macOS/Linux use your system python.
 
-Then upload the nine files from `01_SANDBOX_DATA/` (drag them all in at once).
-The app matches a file to a table by its file name, so `LFA1.txt` is read as LFA1.
+```bash
+# 1. clone / open the project, then create a virtual environment
+python -m venv .venv
+
+# 2. activate it
+#    Windows (Git Bash / CMD):
+#      .venv\Scripts\activate
+#    Windows (PowerShell):
+#      .venv\Scripts\Activate.ps1
+#    macOS / Linux:
+#      source .venv/bin/activate
+
+# 3. install dependencies
+pip install -r app/00_CODE/requirements.txt
+
+# 4. run the app (from the repo root)
+streamlit run app/00_CODE/FC_VENDOR_BANK_APP.py
+```
+
+Then open http://localhost:8501 in your browser and drag the **nine `.txt`
+files** from `01_SANDBOX_DATA/` into the uploader (drag them all in at once).
+The app matches a file to a table by its file **stem**: `LFA1.txt` is read as
+table LFA1, `BSAK.txt` as BSAK, and so on.
+
+> **Note about `LFA1.csv.xlsx`:** the file named `LFA1.csv.xlsx` in
+> `01_SANDBOX_DATA/` is an **Excel workbook (binary)**, not a CSV. Do **not**
+> rename it to `LFA1.csv` and upload it — the app reads text files only and
+> will fail with a schema/parse error (the binary bytes are not decodable as a
+> delimited text). Upload the real `LFA1.txt` instead. If you have SAP data as
+> an `.xlsx`, export it to tab-delimited text (or CSV) first.
 
 ## Or run it from GitHub Pages, with no server
 
@@ -59,6 +86,7 @@ Every reusable object goes through `Z_SHARED_FUNCTIONS`, per the standard:
     FC_COUNTRY_COORDINATES            country centroids for the map graphs
     FC_UI_STYLE                       stylesheet + hero / section / status pills
     FC_STORAGE                        snapshot persistence (local disk / S3)
+    FC_TYPECAST                       numeric column casting + data-quality warnings
 
 ## UI
 
@@ -85,15 +113,37 @@ restart or a container replacement.
 - **AWS deploys** set `VB_S3_BUCKET=<bucket>` and the snapshot goes to
   `s3://<bucket>/vendor-bank-app/<version>/snapshot.pkl` via `boto3`. Any S3
   failure degrades silently to the local-disk cache.
-- On load, the app offers **Use saved data / Discard saved data** when a
-  snapshot exists; **Start Over** clears it too.
+- On load, a saved snapshot is **restored automatically** so reloading the page
+  keeps the data; **Start Over** clears it too.
 - The snapshot is tagged with an app-version so old caches are never loaded.
+- **Encryption (optional but recommended for real data):** set `VB_SNAPSHOT_KEY`
+  to a Fernet key (`python -c "from cryptography.fernet import Fernet;
+  print(Fernet.generate_key().decode())"`) and the snapshot is encrypted at
+  rest on disk and in S3. Without it the app logs a loud warning that the
+  snapshot is NOT encrypted. `cryptography` ships in `requirements-aws.txt`.
 - The stlite browser build (GitHub Pages) has no disk; it degrades gracefully —
   it simply has no snapshot and uploads fresh each time.
 
-For AWS, install with `requirements-aws.txt` (adds `boto3`) and give the task
-an IAM role allowing `s3:GetObject/PutObject/DeleteObject/HeadObject` on the
-bucket. No hardcoded credentials — use the role / `AWS_PROFILE`.
+For AWS, install with `requirements-aws.txt` (adds `boto3` and `cryptography`)
+and give the task an IAM role allowing `s3:GetObject/PutObject/DeleteObject/
+HeadObject` on the bucket. No hardcoded credentials — use the role / `AWS_PROFILE`.
+
+## Data hardening (real SAP data)
+
+The parser and validators are defensive by design:
+
+- `FC_IMPORT_TEXT` auto-detects the **separator** (tab/comma/semicolon/pipe)
+  and **encoding** (utf-8-sig/utf-8/cp1252/latin-1); decoding never silently
+  replaces unknown bytes with U+FFFD.
+- `FC_READ_UPLOADS` reports failed files loudly with the reason, and returns a
+  **sha256 fingerprint** of every accepted file (shown in section 1.4 and in
+  the run metadata under 2.3 for auditability).
+- `FC_TYPECAST` casts `WRBTR` amounts to numeric and reports any unparsable
+  value (count + example) as a data-quality warning before Run Analysis.
+- `FC_CHECK_TABLE_WARNINGS` flags empty tables, blank `LIFNR`/`BUKRS` keys, and
+  row counts above 2M (performance red flag).
+- The KPI/map/join logic is untouched: hardening only adds warnings and clearer
+  failures, never changes the numbers.
 
 ## Not real data
 

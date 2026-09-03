@@ -2,10 +2,17 @@
 # Bank blue palette, shared with Z_SHARED_FUNCTIONS/FC_UI_STYLE.py.
 # The stlite browser build (index.html) has no config.toml; it follows the OS
 # theme instead, so FC_UI_STYLE also ships dark-mode overrides.
-# No [server]/[browser] sections on purpose: those stay at defaults so the
-# local server and any deployed page behave the same.
+# No [browser] section on purpose: it stays at defaults so the local server
+# and any deployed page behave/render the same.
 primaryColor = "#2563EB"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F1F5F9"
 textColor = "#0F172A"
 font = "sans serif"
+
+[server]
+# Local dev convenience only — the stlite deploy has no server, so this has
+# no bearing on the deployed page. Without it, editing a file while `streamlit
+# run` is already up just shows a "Source file changed" prompt; you'd have to
+# click Rerun (or press R) yourself for the change to show.
+runOnSave = true

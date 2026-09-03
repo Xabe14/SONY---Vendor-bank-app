@@ -10,6 +10,8 @@ and on GitHub Pages.
 
 import streamlit as PI_STREAMLIT
 
+from FC_APP_CONFIG import ZV_BO_USE_WIDTH
+
 # ------------------------------------------------------------------ brand
 # Keep in sync with .streamlit/config.toml (local server theme).
 ZV_ST_COLOR_PRIMARY = '#2563EB'
@@ -79,30 +81,30 @@ html, body, [data-testid="stAppViewContainer"] {
 
 /* ------------------------------------------------------- section head */
 .zv-section { display: flex; align-items: center; gap: 0.6rem;
-              flex-wrap: wrap; margin: 1.4rem 0 0.2rem; }
+              flex-wrap: wrap; margin: 0.4rem 0 0.2rem; }
 .zv-section-badge {
     background: linear-gradient(120deg, __PRIMARY__ 0%, __ACCENT__ 100%);
     color: #FFFFFF;
-    font-size: 0.85rem;
+    font-size: 0.72rem;
     font-weight: 700;
-    min-width: 1.7rem;
+    min-width: 1.5rem;
     text-align: center;
-    border-radius: 9px;
-    padding: 0.28rem 0.45rem;
+    border-radius: 8px;
+    padding: 0.22rem 0.4rem;
     box-shadow: 0 3px 8px rgba(37, 99, 235, 0.3);
 }
 .zv-section-title {
     margin: 0; padding: 0;
     color: __TEXT__;
-    font-size: 1.18rem;
-    font-weight: 700;
+    font-size: 0.58rem;
+    font-weight: 500;
     letter-spacing: -0.01em;
 }
 .zv-section-sub {
     flex-basis: 100%;
     margin: 0.1rem 0 0 2.3rem;
     color: __MUTED__;
-    font-size: 0.85rem;
+    font-size: 0.50rem;
 }
 
 /* ------------------------------------------------------------ sidebar */
@@ -178,28 +180,37 @@ html, body, [data-testid="stAppViewContainer"] {
     font-weight: 700;
 }
 
-/* ------------------------------------------------ bordered containers */
-[data-testid="stVerticalBlockBorderWrapper"] {
+/* ------------------------------------------------ bordered containers
+   Streamlit 1.62 DOM: stColumn > stVerticalBlock > stLayoutWrapper >
+   stVerticalBlock (the innermost one carries the border). The outer
+   stVerticalBlock of each column stretches with the row, and the layout
+   wrapper + inner block fill it, so sibling cards share equal height. */
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]
+    > [data-testid="stVerticalBlock"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+[data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex: 1 1 0%;
+    display: flex;
+    flex-direction: column;
+}
+[data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+    flex: 1 1 0%;
     background: __SURFACE__;
-    border: 1px solid #E2E8F0 !important;
+    border: 1px solid #E2E8F0;
     border-radius: 14px;
     box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
     padding: 0.4rem 1rem 1rem;
 }
-[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] {
-    color: __TEXT__;
-}
-
-/* equal-height cards: bordered containers inside a column row stretch to the
-   tallest sibling (used by the 1.1 / 1.2 / 1.3 input cards). Only border
-   wrappers are affected; metric rows, maps and buttons keep natural height. */
-[data-testid="stHorizontalBlock"] > div {
-    display: flex;
-    flex-direction: column;
-}
-[data-testid="stHorizontalBlock"] > div > [data-testid="stVerticalBlockBorderWrapper"] {
-    flex: 1 1 0%;
-}
+[data-testid="stLayoutWrapper"]
+    [data-testid="stMarkdownContainer"] { color: __TEXT__; }
 
 /* --------------------------------------------------------------- buttons */
 .stButton > button,
@@ -275,7 +286,7 @@ html, body, [data-testid="stAppViewContainer"] {
     .zv-hero { padding: 1.1rem 1.2rem 1rem; }
     .zv-hero h1 { font-size: 1.3rem; }
     .zv-hero-sub { font-size: 0.85rem; }
-    .zv-section-title { font-size: 1.02rem; }
+    .zv-section-title { font-size: 0.58rem; }
     .zv-section-sub { margin-left: 0; }
     /* stack Streamlit columns on small screens */
     [data-testid="stHorizontalBlock"] { flex-direction: column; }
@@ -288,12 +299,17 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 
 /* ----------------------------------------------------- dark mode overrides
-   The local server enforces a light theme via config.toml; the stlite
-   browser build follows the OS, so keep surfaces readable there too. */
+   The local server enforces a light theme via config.toml, but prefers-
+   color-scheme reflects the OS/browser setting regardless of that theme, so
+   this block is stripped out below (FC_INJECT_CSS) whenever ZV_BO_USE_WIDTH
+   is True (local server). Only the stlite browser build (no config.toml,
+   background genuinely follows the OS) keeps it, so surfaces stay readable
+   there. */
+/* __DARK_MODE_START__ */
 @media (prefers-color-scheme: dark) {
     [data-testid="stAppViewContainer"] { color: #E2E8F0; }
     [data-testid="stMetric"],
-    [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
     [data-testid="stExpander"] {
         background: #1E293B;
         border-color: #334155;
@@ -304,12 +320,25 @@ html, body, [data-testid="stAppViewContainer"] {
     .zv-section-sub { color: #94A3B8; }
     .stTabs [data-baseweb="tab-list"] { background: #1E293B; }
     .stTabs [data-baseweb="tab"]:not([aria-selected="true"]) { color: #94A3B8; }
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] {
-        color: #E2E8F0;
-    }
+    [data-testid="stLayoutWrapper"]
+        [data-testid="stMarkdownContainer"] { color: #E2E8F0; }
 }
+/* __DARK_MODE_END__ */
 </style>
 """
+
+
+def FC_STRIP_DARK_MODE_BLOCK(ZVFCI_ST_CSS: str) -> str:
+    """Remove the prefers-color-scheme block (local server: theme is fixed
+    by config.toml regardless of OS dark mode, so the override would only
+    wash out the text against the enforced light background)."""
+    ZV_NU_START = ZVFCI_ST_CSS.find('/* __DARK_MODE_START__ */')
+    ZV_NU_END = ZVFCI_ST_CSS.find('/* __DARK_MODE_END__ */')
+    if ZV_NU_START == -1 or ZV_NU_END == -1:
+        return ZVFCI_ST_CSS
+    ZV_NU_END += len('/* __DARK_MODE_END__ */')
+    return ZVFCI_ST_CSS[:ZV_NU_START] + ZVFCI_ST_CSS[ZV_NU_END:]
+
 
 ZV_ST_CSS = (
     ZV_ST_CSS_TEMPLATE
@@ -324,6 +353,9 @@ ZV_ST_CSS = (
     .replace('__WARNING__', ZV_ST_COLOR_WARNING)
     .replace('__DANGER__', ZV_ST_COLOR_DANGER)
 )
+
+if ZV_BO_USE_WIDTH:  # local server: config.toml already fixes the theme
+    ZV_ST_CSS = FC_STRIP_DARK_MODE_BLOCK(ZV_ST_CSS)
 
 
 def FC_INJECT_CSS() -> None:
@@ -361,7 +393,7 @@ def FC_SECTION_HEADER(ZVFCI_ST_NUMBER: str,
     PI_STREAMLIT.markdown(
         f'<div class="zv-section"><span class="zv-section-badge">'
         f'{ZVFCI_ST_NUMBER}</span>'
-        f'<h2 class="zv-section-title">{ZVFCI_ST_TITLE}</h2>'
+        f'<h4 class="zv-section-title">{ZVFCI_ST_TITLE}</h4>'
         f'{ZV_ST_SUB}</div>',
         unsafe_allow_html=True,
     )

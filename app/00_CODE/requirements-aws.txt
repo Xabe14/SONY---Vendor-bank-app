@@ -2,3 +2,4 @@ streamlit
 polars
 xlsxwriter
 boto3
+cryptography
