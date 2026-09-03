@@ -24,10 +24,15 @@ from Z_SHARED_FUNCTIONS.FC_FILTER_BY_CATEGORY_SELECTION import (
 from Z_SHARED_FUNCTIONS.FC_GET_EXCEL_BYTES import FC_GET_EXCEL_BYTES
 from Z_SHARED_FUNCTIONS.FC_DOWNLOAD_BUTTON import FC_DOWNLOAD_BUTTON
 from Z_SHARED_FUNCTIONS.FC_COUNTRY_COORDINATES import FC_COUNTRY_COORDINATES
+from Z_SHARED_FUNCTIONS.FC_COUNTRY_ISO_NUMERIC import FC_COUNTRY_ISO_NUMERIC
+from Z_SHARED_FUNCTIONS.FC_WORLD_COUNTRIES_MAINLAND import FC_LOAD_MAINLAND_GEOJSON
 from Z_SHARED_FUNCTIONS.FC_UI_STYLE import (
     FC_INJECT_CSS,
     FC_SECTION_HEADER,
     FC_STATUS_PILL,
+    ZV_ST_COLOR_PRIMARY,
+    ZV_ST_COLOR_SUCCESS,
+    ZV_ST_COLOR_DANGER,
 )
 from Z_SHARED_FUNCTIONS.FC_STORAGE import (
     FC_SNAPSHOT_CLEAR,
@@ -133,6 +138,22 @@ def FC_ADD_DESCRIPTION(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_DF_TEXT,
     return ZVFCI_DF.join(ZV_DF_LOOKUP, on=ZVFCI_ST_CODE_COLUMN, how='left')
 
 
+def FC_MERGE_CODE_DESCRIPTION(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str,
+                              ZVFCI_ST_DESC_COLUMN: str,
+                              ZVFCI_ST_TARGET_COLUMN: str):
+    """Mandatory field order, 300Framework SAP field naming: a code field
+    carries its description in the same field, named ZF_<Table>_<CodeField>
+    _<DescField> and joined with a bare '-' (see FC_CONCATENATE_FIELDS /
+    FC_LFA1LFB1_CONCAT in 300F_PYTHON_BACKEND), not two separate columns."""
+    return ZVFCI_DF.with_columns(
+        PI_POLARS.concat_str(
+            [PI_POLARS.col(ZVFCI_ST_CODE_COLUMN),
+             PI_POLARS.col(ZVFCI_ST_DESC_COLUMN)],
+            separator='-', ignore_nulls=True,
+        ).alias(ZVFCI_ST_TARGET_COLUMN)
+    ).drop([ZVFCI_ST_CODE_COLUMN, ZVFCI_ST_DESC_COLUMN])
+
+
 def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
     """Join path and test rule exactly as defined on pages 3 and 5."""
     ZV_DF_LFA1 = ZVFCI_DI_TABLES['LFA1']
@@ -202,6 +223,7 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         ZV_DF_DOCS
         .join(ZV_DF_EXCEPTION_KEYS, on=['LIFNR', 'BUKRS'], how='inner')
         .join(ZV_DF_LFA1.select(['LIFNR', 'NAME1']), on='LIFNR', how='left')
+        .join(ZV_DF_T001.select(['BUKRS', 'BUTXT']), on='BUKRS', how='left')
     )
     ZV_DF_TRANSACTIONS = FC_ADD_DESCRIPTION(
         ZV_DF_TRANSACTIONS, 'BLART', ZV_DF_T003T, 'BLART', 'LTEXT',
@@ -214,6 +236,7 @@ def FC_RUN_ANALYSIS(ZVFCI_DI_TABLES: dict) -> dict:
         .rename({'ZBUKR': 'BUKRS'})
         .join(ZV_DF_EXCEPTION_KEYS, on=['LIFNR', 'BUKRS'], how='inner')
         .join(ZV_DF_LFA1.select(['LIFNR', 'NAME1']), on='LIFNR', how='left')
+        .join(ZV_DF_T001.select(['BUKRS', 'BUTXT']), on='BUKRS', how='left')
         .with_columns(PI_POLARS.col('VALUT').str.slice(0, 4).alias('VALUT_YEAR'))
     )
     ZV_DF_SETTLEMENTS = FC_ADD_DESCRIPTION(
@@ -326,6 +349,249 @@ def FC_MAP_GRAPH(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_ST_NAME_COLUMN: str,
         on_select='rerun',
         key=f'chart_{ZVFCI_ST_PARAM_NAME}',
     )
+
+
+def FC_MAP_ROLE_OVERLAP(ZVFCI_DF):
+    """Choropleth: whole country filled in, one colour per role (Sony /
+    vendor / bank country), grey when a country plays more than one role at
+    once — lighter for 2 roles, darker for 3. Built from the already
+    cross-filtered exceptions, so it reacts to clicks on the three maps
+    above instead of staying static like they do.
+
+    The legend is itself clickable (bind='legend'): click a role to dim every
+    other country on this map, and the caller uses the same click to filter
+    the tables below to vendors touching a country with that role. Returns
+    (chart_data, {category: [country codes]}) — (None, {}) when empty.
+    """
+    ZV_LI_DF_ROLES = []
+    for ZV_ST_CODE_COLUMN, ZV_ST_NAME_COLUMN, ZV_ST_ROLE in (
+            ('SONY_LAND1', 'SONY_COUNTRY', 'SONY'),
+            ('VENDOR_LAND1', 'VENDOR_COUNTRY', 'VENDOR'),
+            ('BANKS', 'BANK_COUNTRY', 'BANK')):
+        ZV_LI_DF_ROLES.append(
+            ZVFCI_DF
+            .select([
+                PI_POLARS.col(ZV_ST_CODE_COLUMN).alias('CODE'),
+                PI_POLARS.col(ZV_ST_NAME_COLUMN).alias('COUNTRY'),
+                PI_POLARS.lit(ZV_ST_ROLE).alias('ROLE'),
+            ])
+            .unique()
+        )
+    ZV_DF_ROLES = PI_POLARS.concat(ZV_LI_DF_ROLES).unique()
+
+    ZV_DF_CATEGORY = (
+        ZV_DF_ROLES
+        .group_by(['CODE', 'COUNTRY'])
+        .agg(PI_POLARS.col('ROLE').sort().alias('ROLES'))
+        .with_columns(PI_POLARS.col('ROLES').list.len().alias('ROLE_COUNT'))
+        .with_columns(
+            PI_POLARS.when(PI_POLARS.col('ROLE_COUNT') == 1)
+                      .then(PI_POLARS.col('ROLES').list.first())
+                      .when(PI_POLARS.col('ROLE_COUNT') == 2)
+                      .then(PI_POLARS.lit('OVERLAP_2'))
+                      .otherwise(PI_POLARS.lit('OVERLAP_3'))
+                      .alias('CATEGORY')
+        )
+        .with_columns(PI_POLARS.col('ROLES').list.join(' + ').alias('ROLES_TEXT'))
+        .sort('CODE')
+    )
+
+    ZV_LI_DI_POINTS = []
+    for ZV_DI_ROW in ZV_DF_CATEGORY.to_dicts():
+        ZV_NU_ID = FC_COUNTRY_ISO_NUMERIC(ZV_DI_ROW['CODE'])
+        if ZV_NU_ID is None:
+            continue
+        ZV_LI_DI_POINTS.append({
+            'id': ZV_NU_ID,
+            'code': ZV_DI_ROW['CODE'],
+            'country': ZV_DI_ROW['COUNTRY'],
+            'roles': ZV_DI_ROW['ROLES_TEXT'],
+            'category': ZV_DI_ROW['CATEGORY'],
+        })
+
+    if not ZV_LI_DI_POINTS:
+        PI_STREAMLIT.info('Country role overlap: nothing to plot.')
+        return None, {}
+
+    # invisible large click targets at each country's centroid — real coastlines
+    # are jagged and small countries render as a few pixels at this resolution,
+    # so clicking the filled shape itself is unreliable; a big transparent
+    # circle at the centroid gives an easy, forgiving click target instead.
+    ZV_LI_DI_CLICK_TARGETS = []
+    for ZV_DI_POINT in ZV_LI_DI_POINTS:
+        ZV_TU_COORD = FC_COUNTRY_COORDINATES(ZV_DI_POINT['code'])
+        if ZV_TU_COORD is None:
+            continue
+        ZV_LI_DI_CLICK_TARGETS.append({
+            **ZV_DI_POINT,
+            'lat': ZV_TU_COORD[0],
+            'lon': ZV_TU_COORD[1],
+        })
+
+    ZV_DI_CATEGORY_CODES = {}
+    for ZV_DI_POINT in ZV_LI_DI_POINTS:
+        ZV_DI_CATEGORY_CODES.setdefault(ZV_DI_POINT['category'], []).append(
+            ZV_DI_POINT['code']
+        )
+
+    ZV_DI_TOPOJSON = {
+        'url': 'https://cdn.jsdelivr.net/npm/vega-datasets@2/'
+               'data/world-110m.json',
+        'format': {'type': 'topojson', 'feature': 'countries'},
+    }
+
+    # Mainland-only shapes for the coloured layer: a SAP LAND1 code like 'FR'
+    # just means the country as a whole, with no location detail — filling in
+    # the full sovereign territory would also light up disconnected overseas
+    # pieces (e.g. France's shape reaches into French Guiana), which looks
+    # like data that isn't there. Falls back to the full-territory lookup (old
+    # behaviour) if the topojson can't be fetched/parsed for some reason.
+    try:
+        ZV_DI_MAINLAND = FC_LOAD_MAINLAND_GEOJSON(
+            tuple(sorted(ZV_DI_POINT['id'] for ZV_DI_POINT in ZV_LI_DI_POINTS))
+        )
+        ZV_LI_DI_FEATURES = []
+        for ZV_DI_POINT in ZV_LI_DI_POINTS:
+            ZV_DI_GEOM = ZV_DI_MAINLAND.get(ZV_DI_POINT['id'])
+            if ZV_DI_GEOM is None:
+                continue
+            ZV_LI_DI_FEATURES.append({
+                'type': 'Feature',
+                'geometry': ZV_DI_GEOM,
+                'properties': {
+                    'code': ZV_DI_POINT['code'],
+                    'country': ZV_DI_POINT['country'],
+                    'roles': ZV_DI_POINT['roles'],
+                    'category': ZV_DI_POINT['category'],
+                },
+            })
+        ZV_DI_COLOR_LAYER = {
+            'data': {'values': ZV_LI_DI_FEATURES},
+            'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
+                     'strokeWidth': 0.5, 'tooltip': True},
+            'encoding': {
+                'color': {
+                    'field': 'properties.category', 'type': 'nominal',
+                    'scale': {
+                        'domain': ['SONY', 'VENDOR', 'BANK',
+                                   'OVERLAP_2', 'OVERLAP_3'],
+                        'range': [ZV_ST_COLOR_PRIMARY, ZV_ST_COLOR_SUCCESS,
+                                  ZV_ST_COLOR_DANGER, '#9CA3AF', '#4B5563'],
+                    },
+                    'legend': {
+                        'title': 'Role — click a country to filter by it',
+                        'labelExpr': (
+                            "datum.label == 'SONY' ? 'Sony country' : "
+                            "datum.label == 'VENDOR' ? 'Vendor country' : "
+                            "datum.label == 'BANK' ? 'Bank country' : "
+                            "datum.label == 'OVERLAP_2' ? '2 roles overlap' : "
+                            "'3 roles overlap'"
+                        ),
+                    },
+                },
+                'tooltip': [
+                    {'field': 'properties.country', 'title': 'Country'},
+                    {'field': 'properties.code', 'title': 'Key'},
+                    {'field': 'properties.roles', 'title': 'Roles'},
+                ],
+            },
+        }
+    except Exception:
+        ZV_DI_COLOR_LAYER = {
+            'data': ZV_DI_TOPOJSON,
+            'transform': [
+                {
+                    'lookup': 'id',
+                    'from': {
+                        'data': {'values': ZV_LI_DI_POINTS},
+                        'key': 'id',
+                        'fields': ['code', 'country', 'roles', 'category'],
+                    },
+                },
+                {'filter': 'datum.category != null'},
+            ],
+            'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
+                     'strokeWidth': 0.5, 'tooltip': True},
+            'encoding': {
+                'color': {
+                    'field': 'category', 'type': 'nominal',
+                    'scale': {
+                        'domain': ['SONY', 'VENDOR', 'BANK',
+                                   'OVERLAP_2', 'OVERLAP_3'],
+                        'range': [ZV_ST_COLOR_PRIMARY, ZV_ST_COLOR_SUCCESS,
+                                  ZV_ST_COLOR_DANGER, '#9CA3AF', '#4B5563'],
+                    },
+                    'legend': {
+                        'title': 'Role — click a country to filter by it',
+                        'labelExpr': (
+                            "datum.label == 'SONY' ? 'Sony country' : "
+                            "datum.label == 'VENDOR' ? 'Vendor country' : "
+                            "datum.label == 'BANK' ? 'Bank country' : "
+                            "datum.label == 'OVERLAP_2' ? '2 roles overlap' : "
+                            "'3 roles overlap'"
+                        ),
+                    },
+                },
+                'tooltip': [
+                    {'field': 'country', 'title': 'Country'},
+                    {'field': 'code', 'title': 'Key'},
+                    {'field': 'roles', 'title': 'Roles'},
+                ],
+            },
+        }
+
+    ZV_DI_COLOR_LAYER['encoding']['opacity'] = {
+        'condition': {'param': 'ZV_ROLE_SELECTION', 'value': 1},
+        'value': 0.25,
+    }
+
+    ZV_OB_CHART = PI_STREAMLIT.vega_lite_chart(
+        {
+            'title': 'Country role overlap (Sony / vendor / bank)',
+            'height': 230,
+            'projection': {'type': 'equalEarth'},
+            'layer': [
+                {
+                    'data': ZV_DI_TOPOJSON,
+                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
+                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
+                },
+                ZV_DI_COLOR_LAYER,
+                {
+                    # Click target, sized small on purpose. This circle is
+                    # topmost (drawn last) so it intercepts the hover before
+                    # the shape underneath gets a chance to — each circle's
+                    # own tooltip data is always correct for itself, but a
+                    # big radius reaches into neighbouring countries in a
+                    # crowded region like Western Europe (hovering France
+                    # would land inside the Netherlands' circle and show its
+                    # tooltip instead). Small radius keeps that bleed to a
+                    # minimum while still being far easier to hit than the
+                    # raw jagged coastline fragments (3-9px).
+                    'data': {'values': ZV_LI_DI_CLICK_TARGETS},
+                    'params': [{
+                        'name': 'ZV_ROLE_SELECTION',
+                        'select': {'type': 'point', 'fields': ['category']},
+                    }],
+                    'mark': {'type': 'circle', 'opacity': 0, 'size': 80,
+                             'tooltip': True},
+                    'encoding': {
+                        'longitude': {'field': 'lon', 'type': 'quantitative'},
+                        'latitude': {'field': 'lat', 'type': 'quantitative'},
+                        'tooltip': [
+                            {'field': 'country', 'title': 'Country'},
+                            {'field': 'code', 'title': 'Key'},
+                            {'field': 'roles', 'title': 'Roles'},
+                        ],
+                    },
+                },
+            ],
+        },
+        use_container_width=True,
+        on_select='rerun',
+        key='chart_role_overlap',
+    )
+    return ZV_OB_CHART, ZV_DI_CATEGORY_CODES
 
 
 def FC_SHOW_TABLE(ZVFCI_ST_TITLE: str, ZVFCI_DF, ZVFCI_ST_FILENAME: str,
@@ -588,36 +854,66 @@ with PI_STREAMLIT.container(border=True):
         'Click a bubble on any map to cross-filter the other maps and the '
         'tables below. Click it again to clear.'
     )
-    ZV_OB_MAP1, ZV_OB_MAP2, ZV_OB_MAP3 = PI_STREAMLIT.columns(3)
-    with ZV_OB_MAP1:
+    ZV_OB_MAP_ROW1_COL1, ZV_OB_MAP_ROW1_COL2 = PI_STREAMLIT.columns(2)
+    ZV_OB_MAP_ROW2_COL1, ZV_OB_MAP_ROW2_COL2 = PI_STREAMLIT.columns(2)
+    with ZV_OB_MAP_ROW1_COL1:
         ZV_OB_CHART_SONY = FC_MAP_GRAPH(
             ZV_DF_EXCEPTIONS, 'SONY_LAND1', 'SONY_COUNTRY',
             'Sony country (T001_LAND1)', 'ZV_SONY_SELECTION'
         )
-    with ZV_OB_MAP2:
+    with ZV_OB_MAP_ROW1_COL2:
         ZV_OB_CHART_VENDOR = FC_MAP_GRAPH(
             ZV_DF_EXCEPTIONS, 'VENDOR_LAND1', 'VENDOR_COUNTRY',
             'Vendor country (LFA1_LAND1)', 'ZV_VENDOR_SELECTION'
         )
-    with ZV_OB_MAP3:
+    with ZV_OB_MAP_ROW2_COL1:
         ZV_OB_CHART_BANK = FC_MAP_GRAPH(
             ZV_DF_EXCEPTIONS, 'BANKS', 'BANK_COUNTRY',
             'Vendor bank (LFBK_BANKS)', 'ZV_BANK_SELECTION'
         )
 
-# cross-filtering, per the shared-function pattern in the Streamlit chapter
-for ZV_OB_CHART, ZV_ST_PARAM, ZV_ST_COLUMN in (
-        (ZV_OB_CHART_SONY, 'ZV_SONY_SELECTION', 'SONY_LAND1'),
-        (ZV_OB_CHART_VENDOR, 'ZV_VENDOR_SELECTION', 'VENDOR_LAND1'),
-        (ZV_OB_CHART_BANK, 'ZV_BANK_SELECTION', 'BANKS')):
-    ZV_OB_SELECTION = FC_GET_SELECTION_VALUE(
-        ZVFCI_OB_CHART_DATA=ZV_OB_CHART,
-        ZVFCI_ST_PARAM_NAME=ZV_ST_PARAM,
-    )
-    ZV_DF_EXCEPTIONS = FC_FILTER_BY_CATEGORY_SELECTION(
-        ZVFCI_DF=ZV_DF_EXCEPTIONS,
-        ZVFCI_OB_SELECTION=ZV_OB_SELECTION,
-        ZVFCI_ST_CATEGORY_COLUMN=ZV_ST_COLUMN,
+    # cross-filtering, per the shared-function pattern in the Streamlit
+    # chapter — done here (not after the container) so map 4 below can be
+    # built from the already-filtered data in the same normal top-to-bottom
+    # flow, instead of a deferred st.empty() fill (which caused an infinite
+    # rerun loop: the widget's spec is rebuilt on every run, and filling it
+    # out of order made Streamlit re-mount + re-fire its on_select signal).
+    for ZV_OB_CHART, ZV_ST_PARAM, ZV_ST_COLUMN in (
+            (ZV_OB_CHART_SONY, 'ZV_SONY_SELECTION', 'SONY_LAND1'),
+            (ZV_OB_CHART_VENDOR, 'ZV_VENDOR_SELECTION', 'VENDOR_LAND1'),
+            (ZV_OB_CHART_BANK, 'ZV_BANK_SELECTION', 'BANKS')):
+        ZV_OB_SELECTION = FC_GET_SELECTION_VALUE(
+            ZVFCI_OB_CHART_DATA=ZV_OB_CHART,
+            ZVFCI_ST_PARAM_NAME=ZV_ST_PARAM,
+        )
+        ZV_DF_EXCEPTIONS = FC_FILTER_BY_CATEGORY_SELECTION(
+            ZVFCI_DF=ZV_DF_EXCEPTIONS,
+            ZVFCI_OB_SELECTION=ZV_OB_SELECTION,
+            ZVFCI_ST_CATEGORY_COLUMN=ZV_ST_COLUMN,
+        )
+
+    with ZV_OB_MAP_ROW2_COL2:
+        ZV_OB_CHART_ROLE, ZV_DI_ROLE_CATEGORY_CODES = FC_MAP_ROLE_OVERLAP(
+            ZV_DF_EXCEPTIONS
+        )
+
+# clicking a country in map 4 filters to vendors touching any country that
+# plays the same role (e.g. click a '3 roles overlap' country to drill
+# straight into the countries where all three roles collide)
+ZV_LI_ST_ROLE_SELECTION = FC_GET_SELECTION_VALUE(
+    ZVFCI_OB_CHART_DATA=ZV_OB_CHART_ROLE,
+    ZVFCI_ST_PARAM_NAME='ZV_ROLE_SELECTION',
+)
+if ZV_LI_ST_ROLE_SELECTION:
+    ZV_LI_ST_ROLE_CODES = [
+        ZV_ST_CODE
+        for ZV_ST_CATEGORY in ZV_LI_ST_ROLE_SELECTION
+        for ZV_ST_CODE in ZV_DI_ROLE_CATEGORY_CODES.get(ZV_ST_CATEGORY, [])
+    ]
+    ZV_DF_EXCEPTIONS = ZV_DF_EXCEPTIONS.filter(
+        PI_POLARS.col('SONY_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('VENDOR_LAND1').is_in(ZV_LI_ST_ROLE_CODES)
+        | PI_POLARS.col('BANKS').is_in(ZV_LI_ST_ROLE_CODES)
     )
 
 ZV_LI_ST_SELECTED_VENDORS = (
@@ -639,37 +935,82 @@ ZV_OB_TAB_VENDORS, ZV_OB_TAB_DOCS, ZV_OB_TAB_PAY = PI_STREAMLIT.tabs(
     ['Vendors', 'Transactions', 'Payment settlements']
 )
 
+ZV_DF_VENDORS_DISPLAY = ZV_DF_EXCEPTIONS.select([
+    'BUKRS', 'BUTXT', 'SONY_LAND1', 'SONY_COUNTRY',
+    'LIFNR', 'NAME1', 'VENDOR_LAND1', 'VENDOR_COUNTRY', 'ORT01', 'STRAS',
+    'BANKS', 'BANK_COUNTRY', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
+    'LOEVM', 'SPERR',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_LFB1_BUKRS_BUTXT'),
+        ('SONY_LAND1', 'SONY_COUNTRY', 'ZF_T001_LAND1_LANDX'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('VENDOR_LAND1', 'VENDOR_COUNTRY', 'ZF_LFA1_LAND1_LANDX'),
+        ('BANKS', 'BANK_COUNTRY', 'ZF_LFBK_BANKS_LANDX')):
+    ZV_DF_VENDORS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_VENDORS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_VENDORS_DISPLAY = ZV_DF_VENDORS_DISPLAY.select([
+    'ZF_LFB1_BUKRS_BUTXT', 'ZF_T001_LAND1_LANDX',
+    'ZF_LFA1_LIFNR_NAME1', 'ZF_LFA1_LAND1_LANDX', 'ORT01', 'STRAS',
+    'ZF_LFBK_BANKS_LANDX', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
+    'LOEVM', 'SPERR',
+])
+
+ZV_DF_TRANSACTIONS_DISPLAY = ZV_DF_TRANSACTIONS.select([
+    'BUKRS', 'BUTXT', 'LIFNR', 'NAME1', 'BELNR', 'GJAHR', 'BUDAT',
+    'BLART', 'DOCUMENT_TYPE', 'WRBTR', 'WAERS', 'SHKZG',
+    'BVTYP', 'AUGBL', 'SOURCE',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_T001_BUKRS_BUTXT'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('BLART', 'DOCUMENT_TYPE', 'ZF_T003T_BLART_LTEXT')):
+    ZV_DF_TRANSACTIONS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_TRANSACTIONS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_TRANSACTIONS_DISPLAY = ZV_DF_TRANSACTIONS_DISPLAY.select([
+    'ZF_T001_BUKRS_BUTXT', 'ZF_LFA1_LIFNR_NAME1', 'BELNR', 'GJAHR', 'BUDAT',
+    'ZF_T003T_BLART_LTEXT', 'WRBTR', 'WAERS', 'SHKZG',
+    'BVTYP', 'AUGBL', 'SOURCE',
+])
+
+ZV_DF_SETTLEMENTS_DISPLAY = ZV_DF_SETTLEMENTS.select([
+    'BUKRS', 'BUTXT', 'LIFNR', 'NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
+    'ZBNKS', 'PAID_BANK_COUNTRY', 'ZBNKL', 'ZBNKN',
+    'PAYEE_ON_MASTER', 'RZAWE',
+])
+for ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET in (
+        ('BUKRS', 'BUTXT', 'ZF_T001_BUKRS_BUTXT'),
+        ('LIFNR', 'NAME1', 'ZF_LFA1_LIFNR_NAME1'),
+        ('ZBNKS', 'PAID_BANK_COUNTRY', 'ZF_T005T_ZBNKS_LANDX')):
+    ZV_DF_SETTLEMENTS_DISPLAY = FC_MERGE_CODE_DESCRIPTION(
+        ZV_DF_SETTLEMENTS_DISPLAY, ZV_ST_CODE, ZV_ST_DESC, ZV_ST_TARGET
+    )
+ZV_DF_SETTLEMENTS_DISPLAY = ZV_DF_SETTLEMENTS_DISPLAY.select([
+    'ZF_T001_BUKRS_BUTXT', 'ZF_LFA1_LIFNR_NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
+    'ZF_T005T_ZBNKS_LANDX', 'ZBNKL', 'ZBNKN',
+    'PAYEE_ON_MASTER', 'RZAWE',
+])
+
 with ZV_OB_TAB_VENDORS:
     FC_SHOW_TABLE(
         'Table 1 — List of vendors',
-        ZV_DF_EXCEPTIONS.select([
-            'BUKRS', 'BUTXT', 'SONY_LAND1', 'SONY_COUNTRY',
-            'LIFNR', 'NAME1', 'VENDOR_LAND1', 'VENDOR_COUNTRY', 'ORT01', 'STRAS',
-            'BANKS', 'BANK_COUNTRY', 'BANKL', 'BANKN', 'KOINH', 'BVTYP',
-            'LOEVM', 'SPERR',
-        ]),
+        ZV_DF_VENDORS_DISPLAY,
         'VENDOR_BANK_VENDORS.xlsx', 'download_button_1'
     )
 
 with ZV_OB_TAB_DOCS:
     FC_SHOW_TABLE(
         'Table 2 — List of vendor transactions (BSAK / BSIK)',
-        ZV_DF_TRANSACTIONS.select([
-            'BUKRS', 'LIFNR', 'NAME1', 'BELNR', 'GJAHR', 'BUDAT',
-            'BLART', 'DOCUMENT_TYPE', 'WRBTR', 'WAERS', 'SHKZG',
-            'BVTYP', 'AUGBL', 'SOURCE',
-        ]),
+        ZV_DF_TRANSACTIONS_DISPLAY,
         'VENDOR_BANK_TRANSACTIONS.xlsx', 'download_button_2'
     )
 
 with ZV_OB_TAB_PAY:
     FC_SHOW_TABLE(
         'Table 3 — List of payment settlements (REGUH)',
-        ZV_DF_SETTLEMENTS.select([
-            'BUKRS', 'LIFNR', 'NAME1', 'VBLNR', 'VALUT', 'VALUT_YEAR',
-            'ZBNKS', 'PAID_BANK_COUNTRY', 'ZBNKL', 'ZBNKN',
-            'PAYEE_ON_MASTER', 'RZAWE',
-        ]),
+        ZV_DF_SETTLEMENTS_DISPLAY,
         'VENDOR_BANK_SETTLEMENTS.xlsx', 'download_button_3'
     )
     PI_STREAMLIT.markdown(

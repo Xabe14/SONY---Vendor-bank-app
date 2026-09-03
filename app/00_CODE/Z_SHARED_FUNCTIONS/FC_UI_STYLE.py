@@ -10,6 +10,8 @@ and on GitHub Pages.
 
 import streamlit as PI_STREAMLIT
 
+from FC_APP_CONFIG import ZV_BO_USE_WIDTH
+
 # ------------------------------------------------------------------ brand
 # Keep in sync with .streamlit/config.toml (local server theme).
 ZV_ST_COLOR_PRIMARY = '#2563EB'
@@ -288,8 +290,13 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 
 /* ----------------------------------------------------- dark mode overrides
-   The local server enforces a light theme via config.toml; the stlite
-   browser build follows the OS, so keep surfaces readable there too. */
+   The local server enforces a light theme via config.toml, but prefers-
+   color-scheme reflects the OS/browser setting regardless of that theme, so
+   this block is stripped out below (FC_INJECT_CSS) whenever ZV_BO_USE_WIDTH
+   is True (local server). Only the stlite browser build (no config.toml,
+   background genuinely follows the OS) keeps it, so surfaces stay readable
+   there. */
+/* __DARK_MODE_START__ */
 @media (prefers-color-scheme: dark) {
     [data-testid="stAppViewContainer"] { color: #E2E8F0; }
     [data-testid="stMetric"],
@@ -308,8 +315,21 @@ html, body, [data-testid="stAppViewContainer"] {
         color: #E2E8F0;
     }
 }
+/* __DARK_MODE_END__ */
 </style>
 """
+
+def FC_STRIP_DARK_MODE_BLOCK(ZVFCI_ST_CSS: str) -> str:
+    """Remove the prefers-color-scheme block (local server: theme is fixed
+    by config.toml regardless of OS dark mode, so the override would only
+    wash out the text against the enforced light background)."""
+    ZV_NU_START = ZVFCI_ST_CSS.find('/* __DARK_MODE_START__ */')
+    ZV_NU_END = ZVFCI_ST_CSS.find('/* __DARK_MODE_END__ */')
+    if ZV_NU_START == -1 or ZV_NU_END == -1:
+        return ZVFCI_ST_CSS
+    ZV_NU_END += len('/* __DARK_MODE_END__ */')
+    return ZVFCI_ST_CSS[:ZV_NU_START] + ZVFCI_ST_CSS[ZV_NU_END:]
+
 
 ZV_ST_CSS = (
     ZV_ST_CSS_TEMPLATE
@@ -324,6 +344,9 @@ ZV_ST_CSS = (
     .replace('__WARNING__', ZV_ST_COLOR_WARNING)
     .replace('__DANGER__', ZV_ST_COLOR_DANGER)
 )
+
+if ZV_BO_USE_WIDTH:  # local server: config.toml already fixes the theme
+    ZV_ST_CSS = FC_STRIP_DARK_MODE_BLOCK(ZV_ST_CSS)
 
 
 def FC_INJECT_CSS() -> None:
