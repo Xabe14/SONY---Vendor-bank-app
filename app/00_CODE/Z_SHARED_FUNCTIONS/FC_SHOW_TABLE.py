@@ -21,4 +21,10 @@ def FC_SHOW_TABLE(ZVFCI_ST_TITLE: str, ZVFCI_DF, ZVFCI_ST_FILENAME: str,
             ZVFCI_ST_LABEL='Download Excel',
             ZVFCI_ST_KEY=ZVFCI_ST_KEY,
         )
-        PI_STREAMLIT.dataframe(ZVFCI_DF, hide_index=True, **ZV_DI_WIDTH)
+        # A dict, not the polars DataFrame itself: Streamlit's own dataframe
+        # conversion calls polars' to_pandas(), whose Rust-side arrow/pandas
+        # bridge panics with "capacity overflow" on the wasm32 build (stlite /
+        # GitHub Pages) — a dict is built into a pandas DataFrame by pandas
+        # itself, skipping that bridge entirely, on desktop too.
+        PI_STREAMLIT.dataframe(ZVFCI_DF.to_dict(as_series=False),
+                               hide_index=True, **ZV_DI_WIDTH)

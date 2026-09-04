@@ -366,8 +366,10 @@ with PI_STREAMLIT.container(border=True):
             with PI_STREAMLIT.expander(
                     f'{ZV_OB_FILE.name}  —  {ZV_ST_ROWS}{ZV_ST_HASH_TXT}'):
                 if ZV_DF_PREVIEW is not None:
-                    PI_STREAMLIT.dataframe(ZV_DF_PREVIEW.head(20),
-                                           hide_index=True, **ZV_DI_WIDTH)
+                    # dict, not the polars DataFrame — see FC_SHOW_TABLE for why.
+                    PI_STREAMLIT.dataframe(
+                        ZV_DF_PREVIEW.head(20).to_dict(as_series=False),
+                        hide_index=True, **ZV_DI_WIDTH)
                 else:
                     PI_STREAMLIT.warning(
                         'The file name does not match a required table.'
