@@ -53,51 +53,45 @@ def FC_MAP_GRAPH(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_ST_NAME_COLUMN: str,
         PI_STREAMLIT.info(f'{ZVFCI_ST_TITLE}: nothing to plot.')
         return None
 
+    # Single view, no world-outline background layer: the Streamlit version
+    # bundled with the stlite build this app targets (needed for a working
+    # Polars-in-Pyodide setup on GitHub Pages) raises StreamlitAPIException on
+    # any chart selection when the spec has a top-level 'layer' (or hconcat /
+    # vconcat / concat) key, i.e. any chart composed of more than one view.
+    # A bare, single-mark spec with 'params' at the top level is the only
+    # shape that still supports on_select='rerun' there.
     return PI_STREAMLIT.vega_lite_chart(
         {
             'title': ZVFCI_ST_TITLE,
             'height': 230,
+            'background': '#F5F6F8',
             'projection': {'type': 'equalEarth'},
-            'layer': [
-                {
-                    'data': {
-                        'url': 'https://cdn.jsdelivr.net/npm/vega-datasets@2/'
-                               'data/world-110m.json',
-                        'format': {'type': 'topojson', 'feature': 'countries'},
+            'data': {'values': ZV_LI_DI_POINTS},
+            'params': [{
+                'name': ZVFCI_ST_PARAM_NAME,
+                'select': {'type': 'point', 'fields': ['code']},
+            }],
+            'mark': {'type': 'circle', 'tooltip': True, 'opacity': 0.82},
+            'encoding': {
+                'longitude': {'field': 'lon', 'type': 'quantitative'},
+                'latitude': {'field': 'lat', 'type': 'quantitative'},
+                'size': {'field': 'vendors', 'type': 'quantitative',
+                         'scale': {'range': [16, 260]}, 'legend': None},
+                'color': {
+                    'condition': {
+                        'param': ZVFCI_ST_PARAM_NAME,
+                        'field': 'vendors', 'type': 'quantitative',
+                        'scale': {'scheme': 'blues'},
+                        'legend': {'title': 'Vendors'},
                     },
-                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
-                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
+                    'value': '#C8CFDA',
                 },
-                {
-                    'data': {'values': ZV_LI_DI_POINTS},
-                    'params': [{
-                        'name': ZVFCI_ST_PARAM_NAME,
-                        'select': {'type': 'point', 'fields': ['code']},
-                    }],
-                    'mark': {'type': 'circle', 'tooltip': True,
-                             'opacity': 0.82},
-                    'encoding': {
-                        'longitude': {'field': 'lon', 'type': 'quantitative'},
-                        'latitude': {'field': 'lat', 'type': 'quantitative'},
-                        'size': {'field': 'vendors', 'type': 'quantitative',
-                                 'scale': {'range': [16, 260]}, 'legend': None},
-                        'color': {
-                            'condition': {
-                                'param': ZVFCI_ST_PARAM_NAME,
-                                'field': 'vendors', 'type': 'quantitative',
-                                'scale': {'scheme': 'blues'},
-                                'legend': {'title': 'Vendors'},
-                            },
-                            'value': '#C8CFDA',
-                        },
-                        'tooltip': [
-                            {'field': 'country', 'title': 'Country'},
-                            {'field': 'code', 'title': 'Key'},
-                            {'field': 'vendors', 'title': 'Vendors'},
-                        ],
-                    },
-                },
-            ],
+                'tooltip': [
+                    {'field': 'country', 'title': 'Country'},
+                    {'field': 'code', 'title': 'Key'},
+                    {'field': 'vendors', 'title': 'Vendors'},
+                ],
+            },
         },
         use_container_width=True,
         on_select='rerun',
@@ -218,21 +212,6 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
         PI_STREAMLIT.info('Country role overlap: nothing to plot.')
         return None, {}
 
-    # invisible large click targets at each country's centroid — real coastlines
-    # are jagged and small countries render as a few pixels at this resolution,
-    # so clicking the filled shape itself is unreliable; a big transparent
-    # circle at the centroid gives an easy, forgiving click target instead.
-    ZV_LI_DI_CLICK_TARGETS = []
-    for ZV_DI_POINT in ZV_LI_DI_POINTS:
-        ZV_TU_COORD = FC_COUNTRY_COORDINATES(ZV_DI_POINT['code'])
-        if ZV_TU_COORD is None:
-            continue
-        ZV_LI_DI_CLICK_TARGETS.append({
-            **ZV_DI_POINT,
-            'lat': ZV_TU_COORD[0],
-            'lon': ZV_TU_COORD[1],
-        })
-
     ZV_DI_CATEGORY_CODES = {}
     for ZV_DI_POINT in ZV_LI_DI_POINTS:
         ZV_DI_CATEGORY_CODES.setdefault(ZV_DI_POINT['category'], []).append(
@@ -272,6 +251,10 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
             })
         ZV_DI_COLOR_LAYER = {
             'data': {'values': ZV_LI_DI_FEATURES},
+            'params': [{
+                'name': 'ZV_ROLE_SELECTION',
+                'select': {'type': 'point', 'fields': ['properties.code']},
+            }],
             'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
                      'strokeWidth': 0.5, 'tooltip': True},
             'encoding': {
@@ -315,6 +298,10 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
                 },
                 {'filter': 'datum.category != null'},
             ],
+            'params': [{
+                'name': 'ZV_ROLE_SELECTION',
+                'select': {'type': 'point', 'fields': ['code']},
+            }],
             'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
                      'strokeWidth': 0.5, 'tooltip': True},
             'encoding': {
@@ -350,48 +337,22 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
         'value': 0.25,
     }
 
+    # Single view, no separate background/click-target layers: the Streamlit
+    # version bundled with the stlite build this app targets (needed for a
+    # working Polars-in-Pyodide setup on GitHub Pages) raises
+    # StreamlitAPIException on any chart selection when the spec has a
+    # top-level 'layer' key, i.e. any chart composed of more than one view.
+    # The selection now lives directly
+    # on the coloured country shape, so clicking a jagged/small coastline is
+    # less forgiving than the old dedicated click-target circle was — the
+    # legend and tooltip still make it clear which country is which.
+    ZV_DI_COLOR_LAYER['title'] = 'Country role overlap (Sony / vendor / bank)'
+    ZV_DI_COLOR_LAYER['height'] = 230
+    ZV_DI_COLOR_LAYER['background'] = '#F5F6F8'
+    ZV_DI_COLOR_LAYER['projection'] = {'type': 'equalEarth'}
+
     ZV_OB_CHART = PI_STREAMLIT.vega_lite_chart(
-        {
-            'title': 'Country role overlap (Sony / vendor / bank)',
-            'height': 230,
-            'projection': {'type': 'equalEarth'},
-            'layer': [
-                {
-                    'data': ZV_DI_TOPOJSON,
-                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
-                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
-                },
-                ZV_DI_COLOR_LAYER,
-                {
-                    # Click target, sized small on purpose. This circle is
-                    # topmost (drawn last) so it intercepts the hover before
-                    # the shape underneath gets a chance to — each circle's
-                    # own tooltip data is always correct for itself, but a
-                    # big radius reaches into neighbouring countries in a
-                    # crowded region like Western Europe (hovering France
-                    # would land inside the Netherlands' circle and show its
-                    # tooltip instead). Small radius keeps that bleed to a
-                    # minimum while still being far easier to hit than the
-                    # raw jagged coastline fragments (3-9px).
-                    'data': {'values': ZV_LI_DI_CLICK_TARGETS},
-                    'params': [{
-                        'name': 'ZV_ROLE_SELECTION',
-                        'select': {'type': 'point', 'fields': ['code']},
-                    }],
-                    'mark': {'type': 'circle', 'opacity': 0, 'size': 80,
-                             'tooltip': True},
-                    'encoding': {
-                        'longitude': {'field': 'lon', 'type': 'quantitative'},
-                        'latitude': {'field': 'lat', 'type': 'quantitative'},
-                        'tooltip': [
-                            {'field': 'country', 'title': 'Country'},
-                            {'field': 'code', 'title': 'Key'},
-                            {'field': 'roles', 'title': 'Roles'},
-                        ],
-                    },
-                },
-            ],
-        },
+        ZV_DI_COLOR_LAYER,
         use_container_width=True,
         on_select='rerun',
         key=ZVFCI_ST_WIDGET_KEY,
