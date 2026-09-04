@@ -6,7 +6,11 @@ state after a page reload, a server restart, or a container replacement.
 Backends, in priority order:
   1. S3  — enabled only when the env var VB_S3_BUCKET is set (AWS deploy).
           boto3 is imported lazily so local runs never need it installed.
-  2. Local disk under <repo_root>/.cache/vb/ — always available as fallback.
+  2. Local disk under the OS user's home directory — always available as
+     fallback. Keyed by OS account rather than the app's own folder so that
+     several people running the app from one shared/network copy of the
+     source code each get their own snapshot instead of overwriting or
+     restoring each other's uploaded data.
 
 Any S3 failure degrades silently to local disk, so the app keeps working even
 when the bucket is unreachable. The snapshot carries an app-version tag so a
@@ -21,8 +25,7 @@ from pathlib import Path
 ZV_ST_SNAPSHOT_VERSION = '2026-09-03'  # bump when the snapshot format changes
 ZV_ST_SNAPSHOT_FILENAME = 'snapshot.pkl'
 
-ZV_ST_ROOT = Path(__file__).resolve().parent.parent.parent  # <repo_root>
-ZV_OB_CACHE_DIR = ZV_ST_ROOT / '.cache' / 'vb'
+ZV_OB_CACHE_DIR = Path.home() / '.vendor_bank_app_cache'
 ZV_OB_LOCAL_SNAPSHOT = ZV_OB_CACHE_DIR / ZV_ST_SNAPSHOT_FILENAME
 
 ZV_ST_S3_BUCKET = os.environ.get('VB_S3_BUCKET', '').strip()
