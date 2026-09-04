@@ -10,7 +10,18 @@ Vega-Lite params for cross-filtering, session_state to survive a rerun.
 """
 
 import hashlib
+import os
+import sys
 import time
+
+# Polars' Rust core spins up a Rayon thread pool on first use. Pyodide (the
+# WASM runtime behind the GitHub Pages / stlite build) has no real threads for
+# it to schedule, so any DataFrame op — read_csv, join, etc. — deadlocks the
+# tab instead of erroring, which looks like a stuck "Running" spinner right
+# after a file upload. Forcing single-threaded mode only in the browser avoids
+# it while leaving the local desktop run fully multi-threaded.
+if sys.platform == 'emscripten':
+    os.environ.setdefault('POLARS_MAX_THREADS', '1')
 
 import polars as PI_POLARS
 import streamlit as PI_STREAMLIT
