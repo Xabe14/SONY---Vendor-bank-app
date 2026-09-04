@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <title>Vendor bank app</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.8.1/build/stlite.css" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module">
-      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.js";
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.8.1/build/stlite.js";
 
       const ZV_ST_APP_CODE = await fetch("./00_CODE/FC_VENDOR_BANK_APP.py").then(
         response => response.text()
