@@ -1,5 +1,7 @@
 """Streamlit: country bubble map, per the shared-function standard."""
 
+import sys
+
 import polars as PI_POLARS
 import streamlit as PI_STREAMLIT
 
@@ -12,6 +14,21 @@ from Z_SHARED_FUNCTIONS.FC_UI_STYLE import (
     ZV_ST_COLOR_PRIMARY,
     ZV_ST_COLOR_SUCCESS,
     ZV_ST_COLOR_DANGER,
+)
+
+# The Streamlit version bundled with the stlite build this app targets on
+# GitHub Pages (needed there for a working Polars-in-Pyodide setup) raises
+# StreamlitAPIException on any chart selection when the Vega-Lite spec has a
+# top-level 'layer' (or hconcat/vconcat/concat) key — i.e. any chart composed
+# of more than one view. The desktop/server run uses whatever Streamlit is
+# installed locally, which has no such restriction, so it keeps the full
+# world-outline background layer (and, on the role-overlap map, a generous
+# invisible click-target layer). Only the GitHub Pages build collapses each
+# map down to a single view to stay clickable there.
+ZV_BO_SINGLE_VIEW_CHARTS = (sys.platform == 'emscripten')
+
+ZV_ST_WORLD_TOPOJSON_URL = (
+    'https://cdn.jsdelivr.net/npm/vega-datasets@2/data/world-110m.json'
 )
 
 
@@ -53,46 +70,63 @@ def FC_MAP_GRAPH(ZVFCI_DF, ZVFCI_ST_CODE_COLUMN: str, ZVFCI_ST_NAME_COLUMN: str,
         PI_STREAMLIT.info(f'{ZVFCI_ST_TITLE}: nothing to plot.')
         return None
 
-    # Single view, no world-outline background layer: the Streamlit version
-    # bundled with the stlite build this app targets (needed for a working
-    # Polars-in-Pyodide setup on GitHub Pages) raises StreamlitAPIException on
-    # any chart selection when the spec has a top-level 'layer' (or hconcat /
-    # vconcat / concat) key, i.e. any chart composed of more than one view.
-    # A bare, single-mark spec with 'params' at the top level is the only
-    # shape that still supports on_select='rerun' there.
-    return PI_STREAMLIT.vega_lite_chart(
-        {
+    ZV_DI_BUBBLE_LAYER = {
+        'data': {'values': ZV_LI_DI_POINTS},
+        'params': [{
+            'name': ZVFCI_ST_PARAM_NAME,
+            'select': {'type': 'point', 'fields': ['code']},
+        }],
+        'mark': {'type': 'circle', 'tooltip': True, 'opacity': 0.82},
+        'encoding': {
+            'longitude': {'field': 'lon', 'type': 'quantitative'},
+            'latitude': {'field': 'lat', 'type': 'quantitative'},
+            'size': {'field': 'vendors', 'type': 'quantitative',
+                     'scale': {'range': [16, 260]}, 'legend': None},
+            'color': {
+                'condition': {
+                    'param': ZVFCI_ST_PARAM_NAME,
+                    'field': 'vendors', 'type': 'quantitative',
+                    'scale': {'scheme': 'blues'},
+                    'legend': {'title': 'Vendors'},
+                },
+                'value': '#C8CFDA',
+            },
+            'tooltip': [
+                {'field': 'country', 'title': 'Country'},
+                {'field': 'code', 'title': 'Key'},
+                {'field': 'vendors', 'title': 'Vendors'},
+            ],
+        },
+    }
+
+    if ZV_BO_SINGLE_VIEW_CHARTS:
+        ZV_DI_SPEC = {
             'title': ZVFCI_ST_TITLE,
             'height': 230,
             'background': '#F5F6F8',
             'projection': {'type': 'equalEarth'},
-            'data': {'values': ZV_LI_DI_POINTS},
-            'params': [{
-                'name': ZVFCI_ST_PARAM_NAME,
-                'select': {'type': 'point', 'fields': ['code']},
-            }],
-            'mark': {'type': 'circle', 'tooltip': True, 'opacity': 0.82},
-            'encoding': {
-                'longitude': {'field': 'lon', 'type': 'quantitative'},
-                'latitude': {'field': 'lat', 'type': 'quantitative'},
-                'size': {'field': 'vendors', 'type': 'quantitative',
-                         'scale': {'range': [16, 260]}, 'legend': None},
-                'color': {
-                    'condition': {
-                        'param': ZVFCI_ST_PARAM_NAME,
-                        'field': 'vendors', 'type': 'quantitative',
-                        'scale': {'scheme': 'blues'},
-                        'legend': {'title': 'Vendors'},
+            **ZV_DI_BUBBLE_LAYER,
+        }
+    else:
+        ZV_DI_SPEC = {
+            'title': ZVFCI_ST_TITLE,
+            'height': 230,
+            'projection': {'type': 'equalEarth'},
+            'layer': [
+                {
+                    'data': {
+                        'url': ZV_ST_WORLD_TOPOJSON_URL,
+                        'format': {'type': 'topojson', 'feature': 'countries'},
                     },
-                    'value': '#C8CFDA',
+                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
+                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
                 },
-                'tooltip': [
-                    {'field': 'country', 'title': 'Country'},
-                    {'field': 'code', 'title': 'Key'},
-                    {'field': 'vendors', 'title': 'Vendors'},
-                ],
-            },
-        },
+                ZV_DI_BUBBLE_LAYER,
+            ],
+        }
+
+    return PI_STREAMLIT.vega_lite_chart(
+        ZV_DI_SPEC,
         use_container_width=True,
         on_select='rerun',
         key=ZVFCI_ST_WIDGET_KEY,
@@ -219,9 +253,24 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
         )
 
     ZV_DI_TOPOJSON = {
-        'url': 'https://cdn.jsdelivr.net/npm/vega-datasets@2/'
-               'data/world-110m.json',
+        'url': ZV_ST_WORLD_TOPOJSON_URL,
         'format': {'type': 'topojson', 'feature': 'countries'},
+    }
+
+    ZV_DI_LEGEND = {
+        'title': 'Role — click a country to filter by it',
+        'labelExpr': (
+            "datum.label == 'SONY' ? 'Sony country' : "
+            "datum.label == 'VENDOR' ? 'Vendor country' : "
+            "datum.label == 'BANK' ? 'Bank country' : "
+            "datum.label == 'OVERLAP_2' ? '2 roles overlap' : "
+            "'3 roles overlap'"
+        ),
+    }
+    ZV_DI_COLOR_SCALE = {
+        'domain': ['SONY', 'VENDOR', 'BANK', 'OVERLAP_2', 'OVERLAP_3'],
+        'range': [ZV_ST_COLOR_PRIMARY, ZV_ST_COLOR_SUCCESS,
+                  ZV_ST_COLOR_DANGER, '#9CA3AF', '#4B5563'],
     }
 
     # Mainland-only shapes for the coloured layer: a SAP LAND1 code like 'FR'
@@ -230,6 +279,10 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
     # pieces (e.g. France's shape reaches into French Guiana), which looks
     # like data that isn't there. Falls back to the full-territory lookup (old
     # behaviour) if the topojson can't be fetched/parsed for some reason.
+    # ZV_ST_SELECTION_FIELD names, per branch, whichever field this layer's
+    # own data actually carries the country code under — used both by the
+    # single-view (GitHub Pages) chart's own params and by the local/server
+    # chart's separate click-target layer's tooltip-independent selection.
     try:
         ZV_DI_MAINLAND = FC_LOAD_MAINLAND_GEOJSON(
             tuple(sorted(ZV_DI_POINT['id'] for ZV_DI_POINT in ZV_LI_DI_POINTS))
@@ -249,33 +302,16 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
                     'category': ZV_DI_POINT['category'],
                 },
             })
+        ZV_ST_SELECTION_FIELD = 'properties.code'
         ZV_DI_COLOR_LAYER = {
             'data': {'values': ZV_LI_DI_FEATURES},
-            'params': [{
-                'name': 'ZV_ROLE_SELECTION',
-                'select': {'type': 'point', 'fields': ['properties.code']},
-            }],
             'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
                      'strokeWidth': 0.5, 'tooltip': True},
             'encoding': {
                 'color': {
                     'field': 'properties.category', 'type': 'nominal',
-                    'scale': {
-                        'domain': ['SONY', 'VENDOR', 'BANK',
-                                   'OVERLAP_2', 'OVERLAP_3'],
-                        'range': [ZV_ST_COLOR_PRIMARY, ZV_ST_COLOR_SUCCESS,
-                                  ZV_ST_COLOR_DANGER, '#9CA3AF', '#4B5563'],
-                    },
-                    'legend': {
-                        'title': 'Role — click a country to filter by it',
-                        'labelExpr': (
-                            "datum.label == 'SONY' ? 'Sony country' : "
-                            "datum.label == 'VENDOR' ? 'Vendor country' : "
-                            "datum.label == 'BANK' ? 'Bank country' : "
-                            "datum.label == 'OVERLAP_2' ? '2 roles overlap' : "
-                            "'3 roles overlap'"
-                        ),
-                    },
+                    'scale': ZV_DI_COLOR_SCALE,
+                    'legend': ZV_DI_LEGEND,
                 },
                 'tooltip': [
                     {'field': 'properties.country', 'title': 'Country'},
@@ -285,6 +321,7 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
             },
         }
     except Exception:
+        ZV_ST_SELECTION_FIELD = 'code'
         ZV_DI_COLOR_LAYER = {
             'data': ZV_DI_TOPOJSON,
             'transform': [
@@ -298,31 +335,13 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
                 },
                 {'filter': 'datum.category != null'},
             ],
-            'params': [{
-                'name': 'ZV_ROLE_SELECTION',
-                'select': {'type': 'point', 'fields': ['code']},
-            }],
             'mark': {'type': 'geoshape', 'stroke': '#FFFFFF',
                      'strokeWidth': 0.5, 'tooltip': True},
             'encoding': {
                 'color': {
                     'field': 'category', 'type': 'nominal',
-                    'scale': {
-                        'domain': ['SONY', 'VENDOR', 'BANK',
-                                   'OVERLAP_2', 'OVERLAP_3'],
-                        'range': [ZV_ST_COLOR_PRIMARY, ZV_ST_COLOR_SUCCESS,
-                                  ZV_ST_COLOR_DANGER, '#9CA3AF', '#4B5563'],
-                    },
-                    'legend': {
-                        'title': 'Role — click a country to filter by it',
-                        'labelExpr': (
-                            "datum.label == 'SONY' ? 'Sony country' : "
-                            "datum.label == 'VENDOR' ? 'Vendor country' : "
-                            "datum.label == 'BANK' ? 'Bank country' : "
-                            "datum.label == 'OVERLAP_2' ? '2 roles overlap' : "
-                            "'3 roles overlap'"
-                        ),
-                    },
+                    'scale': ZV_DI_COLOR_SCALE,
+                    'legend': ZV_DI_LEGEND,
                 },
                 'tooltip': [
                     {'field': 'country', 'title': 'Country'},
@@ -337,22 +356,83 @@ def FC_MAP_ROLE_OVERLAP(ZVFCI_DF, ZVFCI_ST_WIDGET_KEY: str = 'chart_role_overlap
         'value': 0.25,
     }
 
-    # Single view, no separate background/click-target layers: the Streamlit
-    # version bundled with the stlite build this app targets (needed for a
-    # working Polars-in-Pyodide setup on GitHub Pages) raises
-    # StreamlitAPIException on any chart selection when the spec has a
-    # top-level 'layer' key, i.e. any chart composed of more than one view.
-    # The selection now lives directly
-    # on the coloured country shape, so clicking a jagged/small coastline is
-    # less forgiving than the old dedicated click-target circle was — the
-    # legend and tooltip still make it clear which country is which.
-    ZV_DI_COLOR_LAYER['title'] = 'Country role overlap (Sony / vendor / bank)'
-    ZV_DI_COLOR_LAYER['height'] = 230
-    ZV_DI_COLOR_LAYER['background'] = '#F5F6F8'
-    ZV_DI_COLOR_LAYER['projection'] = {'type': 'equalEarth'}
+    if ZV_BO_SINGLE_VIEW_CHARTS:
+        # Single view, no separate background/click-target layers — see
+        # ZV_BO_SINGLE_VIEW_CHARTS above. The selection lives directly on the
+        # coloured country shape, so clicking a jagged/small coastline is
+        # less forgiving than the dedicated click-target circle below — the
+        # legend and tooltip still make it clear which country is which.
+        ZV_DI_COLOR_LAYER['params'] = [{
+            'name': 'ZV_ROLE_SELECTION',
+            'select': {'type': 'point', 'fields': [ZV_ST_SELECTION_FIELD]},
+        }]
+        ZV_DI_SPEC = {
+            'title': 'Country role overlap (Sony / vendor / bank)',
+            'height': 230,
+            'background': '#F5F6F8',
+            'projection': {'type': 'equalEarth'},
+            **ZV_DI_COLOR_LAYER,
+        }
+    else:
+        # invisible large click targets at each country's centroid — real
+        # coastlines are jagged and small countries render as a few pixels at
+        # this resolution, so clicking the filled shape itself is unreliable;
+        # a big transparent circle at the centroid gives an easy, forgiving
+        # click target instead.
+        ZV_LI_DI_CLICK_TARGETS = []
+        for ZV_DI_POINT in ZV_LI_DI_POINTS:
+            ZV_TU_COORD = FC_COUNTRY_COORDINATES(ZV_DI_POINT['code'])
+            if ZV_TU_COORD is None:
+                continue
+            ZV_LI_DI_CLICK_TARGETS.append({
+                **ZV_DI_POINT,
+                'lat': ZV_TU_COORD[0],
+                'lon': ZV_TU_COORD[1],
+            })
+        ZV_DI_SPEC = {
+            'title': 'Country role overlap (Sony / vendor / bank)',
+            'height': 230,
+            'projection': {'type': 'equalEarth'},
+            'layer': [
+                {
+                    'data': ZV_DI_TOPOJSON,
+                    'mark': {'type': 'geoshape', 'fill': '#E6E8EC',
+                             'stroke': '#FFFFFF', 'strokeWidth': 0.5},
+                },
+                ZV_DI_COLOR_LAYER,
+                {
+                    # Click target, sized small on purpose. This circle is
+                    # topmost (drawn last) so it intercepts the hover before
+                    # the shape underneath gets a chance to — each circle's
+                    # own tooltip data is always correct for itself, but a
+                    # big radius reaches into neighbouring countries in a
+                    # crowded region like Western Europe (hovering France
+                    # would land inside the Netherlands' circle and show its
+                    # tooltip instead). Small radius keeps that bleed to a
+                    # minimum while still being far easier to hit than the
+                    # raw jagged coastline fragments (3-9px).
+                    'data': {'values': ZV_LI_DI_CLICK_TARGETS},
+                    'params': [{
+                        'name': 'ZV_ROLE_SELECTION',
+                        'select': {'type': 'point', 'fields': ['code']},
+                    }],
+                    'mark': {'type': 'circle', 'opacity': 0, 'size': 80,
+                             'tooltip': True},
+                    'encoding': {
+                        'longitude': {'field': 'lon', 'type': 'quantitative'},
+                        'latitude': {'field': 'lat', 'type': 'quantitative'},
+                        'tooltip': [
+                            {'field': 'country', 'title': 'Country'},
+                            {'field': 'code', 'title': 'Key'},
+                            {'field': 'roles', 'title': 'Roles'},
+                        ],
+                    },
+                },
+            ],
+        }
 
     ZV_OB_CHART = PI_STREAMLIT.vega_lite_chart(
-        ZV_DI_COLOR_LAYER,
+        ZV_DI_SPEC,
         use_container_width=True,
         on_select='rerun',
         key=ZVFCI_ST_WIDGET_KEY,

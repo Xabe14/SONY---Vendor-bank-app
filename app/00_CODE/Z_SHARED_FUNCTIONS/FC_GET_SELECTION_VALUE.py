@@ -27,9 +27,21 @@ def FC_GET_SELECTION_VALUE(ZVFCI_OB_CHART_DATA, ZVFCI_ST_PARAM_NAME: str):
                 ZV_LI_OUT.extend(ZV_LI_VALUES)
         return ZV_LI_OUT
 
-    # point selections arrive as [{field: value}, ...]
+    # Point selections arrive as [{field: value, ...}, ...] — one dict per
+    # selected point, carrying every encoded channel of that mark (size,
+    # color, tooltip fields...), not just the identifying one restricted by
+    # the chart's own 'select.fields'. Blindly taking every value would mix
+    # the country code in with numbers like the vendor count, breaking any
+    # Polars filter built from the result. Only the identifying field(s)
+    # used by this app's maps ('code', or 'properties.code' for the
+    # GeoJSON-Feature-backed role-overlap map) are ever wanted here.
+    ZV_LI_ST_ID_FIELDS = ('code', 'properties.code')
     ZV_LI_OUT = []
     for ZV_DI_ROW in ZV_OB_PARAM:
-        if isinstance(ZV_DI_ROW, dict):
-            ZV_LI_OUT.extend(ZV_DI_ROW.values())
+        if not isinstance(ZV_DI_ROW, dict):
+            continue
+        for ZV_ST_FIELD in ZV_LI_ST_ID_FIELDS:
+            if ZV_ST_FIELD in ZV_DI_ROW:
+                ZV_LI_OUT.append(ZV_DI_ROW[ZV_ST_FIELD])
+                break
     return ZV_LI_OUT
